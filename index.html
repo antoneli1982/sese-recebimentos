@@ -392,9 +392,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           <label>Turno *<select name="shift" required><option>1º TURNO</option><option>2º TURNO</option><option>3º TURNO</option></select></label>
           <label>Origem *<select name="origin" required><option>NACIONAL</option><option>IMPORTADO</option></select></label>
           
-          <label class="checker-label" id="warehouse-checker-label">Nome do conferente Almoxarifado <span class="required-star" aria-hidden="true">*</span><span class="requirement-badge">Opcional</span><input type="text" name="warehouseChecker" id="warehouse-checker" list="checker-directory" autocomplete="off" aria-describedby="warehouse-checker-source" placeholder="Digite para pesquisar ou informe outro nome"><small class="field-source" id="warehouse-checker-source">Pesquisa entre ${allPeopleDirectory.length} nomes da relação Mão de Obra 08/2026 e também aceita digitação livre.</small></label>
-          <label class="checker-label" id="gate-checker-label">Nome do conferente Gate <span class="required-star" aria-hidden="true">*</span><span class="requirement-badge">Opcional</span><input type="text" name="gateChecker" id="gate-checker" list="checker-directory" autocomplete="off" aria-describedby="gate-checker-source" placeholder="Digite para pesquisar ou informe outro nome"><small class="field-source" id="gate-checker-source">Pesquisa entre ${allPeopleDirectory.length} nomes da relação Mão de Obra 08/2026 e também aceita digitação livre.</small></label>
-          <datalist id="checker-directory">${checkerDatalistOptions()}</datalist>
+
         </div></section>
         <section class="panel form-panel"><div class="form-section-head"><span>02</span><div><h2>Entrada do veículo</h2><p>Dados para localizar e rastrear o recebimento.</p></div></div><div class="form-grid cols-4">
           <label>Data *<input name="receiptDate" type="date" required value="${localDate()}"></label><label>Hora de chegada *<input name="arrivalTime" type="time" required value="${localTime()}"></label>
