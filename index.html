@@ -47,6 +47,78 @@
   .field-source{display:block;margin-top:6px;color:var(--muted);font-size:9px;line-height:1.45;text-transform:none;letter-spacing:0;font-weight:600}.conference-guidance{grid-column:1/-1;margin:-4px 0 1px;padding:11px 13px;border:1px solid #b9d9ec;border-radius:10px;background:#edf7fc;color:var(--blue-dark);font-size:11px;line-height:1.5;text-transform:none;letter-spacing:0;font-weight:650;transition:.2s}.conference-guidance.is-active{border:2px solid var(--red);background:var(--red-soft);color:#8f1730;box-shadow:0 0 0 4px rgba(211,47,75,.09)}.conference-guidance.is-active strong{color:var(--red)}.conference-require-toggle{grid-column:1/-1;padding:12px 14px;border:1px solid var(--line);border-radius:11px;background:var(--canvas);text-transform:none;letter-spacing:0;color:var(--ink)}.conference-require-toggle span small{max-width:720px;line-height:1.45}.checker-label{position:relative;transition:.2s}.checker-label .required-star{display:none;color:var(--red);font-size:15px;font-weight:900;vertical-align:middle}.checker-label .requirement-badge{display:inline-flex;margin-left:6px;padding:3px 7px;border-radius:999px;background:#e8f3fb;color:var(--blue-dark);font-size:8px;font-weight:900;vertical-align:middle;text-transform:uppercase;letter-spacing:.04em}.checker-label.is-required{padding:13px;border:2px solid var(--red);border-radius:12px;background:var(--red-soft);color:#8f1730;box-shadow:0 0 0 4px rgba(211,47,75,.09)}.checker-label.is-required .required-star{display:inline}.checker-label.is-required .requirement-badge{background:var(--red);color:#fff;box-shadow:0 4px 10px rgba(211,47,75,.22)}.checker-label.is-required input{border:2px solid var(--red);background:#fff;color:var(--ink);box-shadow:0 0 0 3px rgba(211,47,75,.08)}.checker-label.is-required input:focus{border-color:#a5142c;box-shadow:0 0 0 4px rgba(211,47,75,.16)}.checker-label.is-required .field-source{color:#9a4050}.warehouse-type-label.is-improductive{padding:11px;border:2px solid #e5a100;border-radius:12px;background:#fff8df;color:#7c5500}.warehouse-type-label.is-improductive select{border:2px solid #e5a100;background:#fffdf5}
   .directory-note{margin:0 0 17px;padding:11px 14px;border:1px solid var(--line);border-radius:10px;background:var(--blue-soft);color:var(--blue-dark);font-size:11px;line-height:1.5}
   html[data-theme="dark"] .directory-note{background:#102433;color:#b9d7ea;border-color:#344b5e}html[data-theme="dark"] .conference-guidance{background:#102433;color:#b9d7ea;border-color:#344b5e}html[data-theme="dark"] .conference-require-toggle{background:#0b1b28;border-color:#344b5e}html[data-theme="dark"] .conference-guidance.is-active{background:#35131b;color:#ffd3dc;border-color:#ff667f;box-shadow:0 0 0 4px rgba(255,102,127,.10)}html[data-theme="dark"] .conference-guidance.is-active strong{color:#ff8fa2}html[data-theme="dark"] .checker-label.is-required{background:#35131b;color:#ffd3dc;border-color:#ff667f;box-shadow:0 0 0 4px rgba(255,102,127,.10)}html[data-theme="dark"] .checker-label.is-required .requirement-badge{background:#ff667f;color:#1d080d}html[data-theme="dark"] .checker-label.is-required input{background:#170d11;color:var(--ink);border-color:#ff667f}html[data-theme="dark"] .checker-label.is-required .field-source{color:#efacb8}html[data-theme="dark"] .warehouse-type-label.is-improductive{background:#332a10;color:#ffe8a3;border-color:#e5a100}html[data-theme="dark"] .warehouse-type-label.is-improductive select{background:#211c0d;color:#ffe8a3;border-color:#e5a100}
+
+
+  /* Formulário operacional ampliado para melhorar leitura e preenchimento */
+  .excel-prefill{max-width:1460px;width:100%;grid-template-columns:54px minmax(0,1fr) auto;gap:18px;padding:20px 22px;margin-bottom:22px;border-radius:18px}
+  .excel-prefill-icon{width:54px;height:54px;border-radius:14px;font-size:21px}
+  .excel-prefill strong{font-size:15px;line-height:1.35}
+  .excel-prefill span{font-size:12px;line-height:1.55;margin-top:5px}
+  .excel-prefill-actions{gap:10px}
+  .excel-prefill-actions .primary,.excel-prefill-actions .secondary{min-height:46px;padding:12px 18px;font-size:13px}
+
+  .form-layout{max-width:1460px;width:100%;gap:24px}
+  .form-panel{padding:32px 34px;border-radius:20px}
+  .form-section-head{gap:16px;padding-bottom:24px;margin-bottom:26px}
+  .form-section-head>span{width:46px;height:46px;border-radius:13px;font-size:13px;flex:0 0 46px}
+  .form-section-head h2{font-size:22px;line-height:1.25;margin-bottom:6px}
+  .form-section-head p{font-size:13px;line-height:1.5}
+  .form-grid{gap:22px 20px}
+  .form-grid label,.block-label{font-size:12px;line-height:1.45;letter-spacing:.055em}
+  .form-grid input,.form-grid select,.block-label textarea{min-height:52px;margin-top:9px;padding:14px 15px;border-radius:11px;font-size:15px;line-height:1.35}
+  .block-label textarea{min-height:120px}
+
+  /* A identificação passa a usar duas colunas amplas em telas grandes. */
+  #receipt-form .form-panel:first-child .form-grid.cols-3{grid-template-columns:repeat(2,minmax(0,1fr))}
+  #receipt-form .form-panel:first-child .conference-guidance,
+  #receipt-form .form-panel:first-child .conference-require-toggle,
+  #receipt-form .form-panel:first-child datalist{grid-column:1/-1}
+
+  .conference-guidance{margin:0;padding:15px 17px;border-radius:12px;font-size:13px;line-height:1.6}
+  .conference-require-toggle{min-height:76px;padding:16px 18px;border-radius:13px;gap:15px}
+  .conference-require-toggle span{min-width:0}
+  .conference-require-toggle span strong{font-size:14px;line-height:1.4}
+  .conference-require-toggle span small{font-size:11px;line-height:1.55;margin-top:5px;max-width:none}
+  .switch-row i{width:50px;height:28px;flex:0 0 50px}
+  .switch-row i:after{width:20px;height:20px;left:4px;top:4px}
+  .switch-row input:checked+i:after{left:26px}
+  .checker-label .requirement-badge{margin-left:8px;padding:4px 9px;font-size:10px}
+  .checker-label .required-star{font-size:18px}
+  .field-source{margin-top:8px;font-size:10.5px;line-height:1.55}
+  .warehouse-type-label.is-improductive{padding:14px;border-radius:14px}
+
+  @media(max-width:980px){
+    .form-panel{padding:28px}
+    .form-section-head h2{font-size:20px}
+    .form-grid input,.form-grid select,.block-label textarea{font-size:14px}
+  }
+  @media(max-width:820px){
+    .excel-prefill{max-width:none;grid-template-columns:50px minmax(0,1fr);padding:18px}
+    .excel-prefill-icon{width:50px;height:50px}
+    .excel-prefill-actions{grid-column:1/-1}
+    .form-layout{max-width:none}
+    #receipt-form .form-panel:first-child .form-grid.cols-3{grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+  @media(max-width:620px){
+    .excel-prefill{grid-template-columns:44px minmax(0,1fr);gap:12px;padding:16px}
+    .excel-prefill-icon{width:44px;height:44px;font-size:18px}
+    .excel-prefill strong{font-size:14px}
+    .excel-prefill span{font-size:11px}
+    .form-panel{padding:22px 18px;border-radius:16px}
+    .form-section-head{align-items:flex-start;padding-bottom:20px;margin-bottom:22px}
+    .form-section-head>span{width:42px;height:42px;flex-basis:42px}
+    .form-section-head h2{font-size:19px}
+    .form-section-head p{font-size:12px}
+    #receipt-form .form-panel:first-child .form-grid.cols-3{grid-template-columns:1fr}
+    .form-grid{gap:19px}
+    .form-grid label,.block-label{font-size:11.5px}
+    .form-grid input,.form-grid select,.block-label textarea{min-height:52px;font-size:16px;padding:13px 14px}
+    .conference-guidance{font-size:12px;padding:14px}
+    .conference-require-toggle{align-items:flex-start;padding:15px}
+    .conference-require-toggle span strong{font-size:13px}
+    .conference-require-toggle span small{font-size:10.5px}
+    .field-source{font-size:10px}
+  }
   </style>
 </head>
 <body>
