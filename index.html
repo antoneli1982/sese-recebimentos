@@ -224,6 +224,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const STORAGE_KEY = "sese.recebimentos.v1";
     const IMPRODUTIVO_KEY = "sese.almoxarifado.improdutivo.v1";
     const DELETED_KEY = "sese.recebimentos.deleted.v1";
+    const PENDING_SYNC_KEY = "sese.recebimentos.pending-sync.v2";
     const THEME_KEY = "sese.recebimentos.theme";
     const MAX_IMPORT_ROWS = 1000;
     const statusLabels = {AGUARDANDO:"Aguardando",NO_GATE:"No gate",ENCAMINHADO:"Encaminhado",NO_ALMOXARIFADO:"No almoxarifado",CONCLUIDO:"Concluído"};
@@ -255,8 +256,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     let deletedRecords = loadDeletedRecords();
     let firebaseReady = false;
     let firebaseStarting = false;
+    let syncInFlight = null;
+    let reconnectTimer = null;
     let stopRemoteListener = null;
-    let remoteWriteQueue = Promise.resolve();
     let currentView = "new";
     let newReceiptDefaultType = "PRODUTIVO";
     let filters = {search:"",status:"",gate:"",shift:"",origin:"",warehouseChecker:"",gateChecker:""};
@@ -297,35 +299,70 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     function loadRecords(){try{const parsed=JSON.parse(localStorage.getItem(STORAGE_KEY)||"[]");return Array.isArray(parsed)?parsed:[]}catch{return []}}
     function loadDeletedRecords(){try{const parsed=JSON.parse(localStorage.getItem(DELETED_KEY)||"{}");const limit=Date.now()-30*86400000;return Object.fromEntries(Object.entries(parsed).filter(([,date])=>new Date(date).getTime()>limit))}catch{return {}}}
     function saveDeletedRecords(){try{localStorage.setItem(DELETED_KEY,JSON.stringify(deletedRecords))}catch{}}
+    function emptyPendingSync(){return {revision:0,replace:null,upserts:{},deletes:{}}}
+    function loadPendingSync(){
+      try{const raw=localStorage.getItem(PENDING_SYNC_KEY);if(!raw)return receipts.length?{...emptyPendingSync(),revision:1,upserts:recordsObject(receipts)}:emptyPendingSync();const parsed=JSON.parse(raw);return parsed&&typeof parsed==="object"?{...emptyPendingSync(),...parsed,upserts:parsed.upserts||{},deletes:parsed.deletes||{}}:emptyPendingSync()}
+      catch{return emptyPendingSync()}
+    }
+    let pendingSync=loadPendingSync();
+    function hasPendingSync(){return Boolean(pendingSync.replace||Object.keys(pendingSync.upserts).length||Object.keys(pendingSync.deletes).length)}
+    function persistPendingSync(){try{localStorage.setItem(PENDING_SYNC_KEY,JSON.stringify(pendingSync));updateQueueBadge();return true}catch(error){showNotice("error","O armazenamento do navegador está cheio. Exporte o Excel antes de continuar.");return false}}
+    if(hasPendingSync())persistPendingSync();
     function saveLocalRecords(){
       try{localStorage.setItem(STORAGE_KEY,JSON.stringify(receipts));updateQueueBadge();return true}
       catch(error){showNotice("error","O armazenamento do navegador está cheio. Exporte o Excel e exclua registros antigos.");return false}
     }
     function recordsObject(rows=receipts){return Object.fromEntries(rows.filter(item=>item&&item.id).map(item=>[item.id,item]))}
     function setSyncState(state,label){syncStatus.dataset.state=state;syncStatus.querySelector("span").textContent=label}
-    function queueRemoteWrite(operation){
-      if(!saveLocalRecords())return Promise.resolve(false);
-      if(!firebaseReady){setSyncState("offline","Salvo neste dispositivo");return Promise.resolve(true)}
-      setSyncState("syncing","Sincronizando");
-      remoteWriteQueue=remoteWriteQueue.then(operation).then(()=>{setSyncState("online","Firebase em tempo real");return true}).catch(error=>{console.error("Falha ao sincronizar:",error);firebaseReady=false;setSyncState("offline","Salvo neste dispositivo");showNotice("error","Registro salvo neste dispositivo. A sincronização será retomada automaticamente quando houver conexão.");setTimeout(initializeFirebase,10000);return true});
-      return remoteWriteQueue;
+    function firebaseErrorMessage(error){
+      const code=String(error?.code||"").toLowerCase();const message=String(error?.message||"").toLowerCase();
+      if(code.includes("operation-not-allowed")||code.includes("configuration-not-found"))return "A autenticação anônima não está habilitada no Firebase.";
+      if(code.includes("permission-denied")||message.includes("permission_denied")||message.includes("permission denied"))return "O Firebase recusou a gravação. Verifique as regras do Realtime Database para usuários autenticados.";
+      if(code.includes("api-key-not-valid")||message.includes("api key"))return "A chave do aplicativo Firebase foi recusada ou está com restrição de domínio.";
+      if(code.includes("network-request-failed")||message.includes("network"))return "Sem conexão com os servidores do Firebase.";
+      return `Falha no Firebase${error?.code?` (${error.code})`:""}.`;
     }
-    function saveRecord(record){if(deletedRecords[record.id]){delete deletedRecords[record.id];saveDeletedRecords()}return queueRemoteWrite(()=>firebaseApi.set(firebaseApi.ref(firebaseDatabase,`recebimentos/${record.id}`),record))}
-    function deleteRecord(id){deletedRecords[id]=new Date().toISOString();saveDeletedRecords();return queueRemoteWrite(()=>firebaseApi.remove(firebaseApi.ref(firebaseDatabase,`recebimentos/${id}`)))}
-    function saveRecords(){return queueRemoteWrite(()=>firebaseApi.set(receiptsRef,receipts.length?recordsObject():null))}
+    function scheduleFirebaseRetry(delay=15000){clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{if(firebaseReady)flushPendingSync();else initializeFirebase()},delay)}
+    function markUpsert(record){
+      pendingSync.revision++;if(pendingSync.replace)pendingSync.replace.data[record.id]=record;else{pendingSync.upserts[record.id]=record;delete pendingSync.deletes[record.id]}persistPendingSync();
+    }
+    function markDelete(id){
+      pendingSync.revision++;if(pendingSync.replace)delete pendingSync.replace.data[id];else{delete pendingSync.upserts[id];pendingSync.deletes[id]=true}persistPendingSync();
+    }
+    function markReplace(){pendingSync={...emptyPendingSync(),revision:pendingSync.revision+1,replace:{data:recordsObject()}};persistPendingSync()}
+    function mergeRemoteRows(remoteRows){
+      const baseRows=pendingSync.replace?Object.values(pendingSync.replace.data):remoteRows;const merged=new Map(baseRows.filter(item=>item?.id).map(item=>[item.id,item]));
+      for(const [id,record] of Object.entries(pendingSync.upserts))merged.set(id,record);
+      for(const id of Object.keys(pendingSync.deletes))merged.delete(id);
+      for(const [id,deletedAt] of Object.entries(deletedRecords)){const item=merged.get(id);const remoteTime=new Date(item?.updatedAt||item?.createdAt||0).getTime();if(item&&new Date(deletedAt).getTime()>=remoteTime)merged.delete(id)}
+      return [...merged.values()];
+    }
+    async function flushPendingSync(){
+      if(!firebaseReady||!hasPendingSync()){if(firebaseReady)setSyncState("online","Firebase em tempo real");return true}
+      if(syncInFlight)return syncInFlight;
+      syncInFlight=(async()=>{
+        while(firebaseReady&&hasPendingSync()){
+          const batch=JSON.parse(JSON.stringify(pendingSync));const revision=batch.revision;setSyncState("syncing","Sincronizando dados pendentes");
+          if(batch.replace)await firebaseApi.set(receiptsRef,Object.keys(batch.replace.data).length?batch.replace.data:null);
+          else{const changes={...batch.upserts};for(const id of Object.keys(batch.deletes))changes[id]=null;if(Object.keys(changes).length)await firebaseApi.update(receiptsRef,changes)}
+          if(pendingSync.revision===revision){pendingSync=emptyPendingSync();persistPendingSync()}else continue;
+        }
+        setSyncState("online","Firebase em tempo real");return true;
+      })().catch(error=>{console.error("Falha ao sincronizar:",error);setSyncState("offline","Pendente de sincronização");showNotice("error",`${firebaseErrorMessage(error)} Os dados permanecem salvos neste dispositivo e a ferramenta tentará novamente.`);scheduleFirebaseRetry(15000);return true}).finally(()=>{syncInFlight=null});
+      return syncInFlight;
+    }
+    function saveRecord(record){if(deletedRecords[record.id]){delete deletedRecords[record.id];saveDeletedRecords()}if(!saveLocalRecords())return Promise.resolve(false);markUpsert(record);return flushPendingSync()}
+    function deleteRecord(id){deletedRecords[id]=new Date().toISOString();saveDeletedRecords();if(!saveLocalRecords())return Promise.resolve(false);markDelete(id);return flushPendingSync()}
+    function saveRecords(){if(!saveLocalRecords())return Promise.resolve(false);markReplace();return flushPendingSync()}
     async function initializeFirebase(){
       if(firebaseStarting||firebaseReady)return;firebaseStarting=true;setSyncState("connecting","Conectando ao Firebase");
       try{
         if(!firebaseApi){const [appSdk,authSdk,databaseSdk]=await Promise.all([import("https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js"),import("https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js"),import("https://www.gstatic.com/firebasejs/12.17.1/firebase-database.js")]);firebaseApi={initializeApp:appSdk.initializeApp,getAuth:authSdk.getAuth,signInAnonymously:authSdk.signInAnonymously,getDatabase:databaseSdk.getDatabase,ref:databaseSdk.ref,get:databaseSdk.get,set:databaseSdk.set,update:databaseSdk.update,remove:databaseSdk.remove,onValue:databaseSdk.onValue};firebaseApp=firebaseApi.initializeApp(firebaseConfig);firebaseAuth=firebaseApi.getAuth(firebaseApp);firebaseDatabase=firebaseApi.getDatabase(firebaseApp);receiptsRef=firebaseApi.ref(firebaseDatabase,"recebimentos")}
         if(!firebaseAuth.currentUser)await firebaseApi.signInAnonymously(firebaseAuth);
-        const snapshot=await firebaseApi.get(receiptsRef);const remoteRows=snapshot.exists()?Object.values(snapshot.val()).filter(Boolean):[];const remoteById=new Map(remoteRows.map(item=>[item.id,item]));const pending={};
-        for(const localItem of receipts){const remoteItem=remoteById.get(localItem.id);const localTime=new Date(localItem.updatedAt||localItem.createdAt||0).getTime();const remoteTime=new Date(remoteItem?.updatedAt||remoteItem?.createdAt||0).getTime();if(!remoteItem||localTime>remoteTime)pending[localItem.id]=localItem}
-        for(const [deletedId,deletedAt] of Object.entries(deletedRecords)){const remoteItem=remoteById.get(deletedId);const remoteTime=new Date(remoteItem?.updatedAt||remoteItem?.createdAt||0).getTime();if(remoteItem&&new Date(deletedAt).getTime()>=remoteTime)pending[deletedId]=null}
-        if(Object.keys(pending).length)await firebaseApi.update(receiptsRef,pending);
-        const mergedSnapshot=await firebaseApi.get(receiptsRef);receipts=mergedSnapshot.exists()?Object.values(mergedSnapshot.val()).filter(Boolean):[];saveLocalRecords();firebaseReady=true;
-        if(stopRemoteListener)stopRemoteListener();stopRemoteListener=firebaseApi.onValue(receiptsRef,current=>{receipts=current.exists()?Object.values(current.val()).filter(Boolean):[];saveLocalRecords();render();setSyncState("online","Firebase em tempo real")},error=>{console.error("Leitura em tempo real indisponível:",error);firebaseReady=false;setSyncState("offline","Usando cópia local")});
-        setSyncState("online","Firebase em tempo real");render();
-      }catch(error){console.error("Firebase indisponível:",error);firebaseReady=false;setSyncState("offline","Usando cópia local");showNotice("error","Firebase indisponível no momento. A ferramenta continuará funcionando neste dispositivo e tentará sincronizar novamente.");setTimeout(initializeFirebase,15000)}
+        const snapshot=await firebaseApi.get(receiptsRef);const remoteRows=snapshot.exists()?Object.values(snapshot.val()).filter(Boolean):[];receipts=mergeRemoteRows(remoteRows);saveLocalRecords();firebaseReady=true;await flushPendingSync();
+        if(stopRemoteListener)stopRemoteListener();stopRemoteListener=firebaseApi.onValue(receiptsRef,current=>{const remote=current.exists()?Object.values(current.val()).filter(Boolean):[];receipts=mergeRemoteRows(remote);saveLocalRecords();render();setSyncState(hasPendingSync()?"syncing":"online",hasPendingSync()?"Sincronização pendente":"Firebase em tempo real")},error=>{console.error("Leitura em tempo real indisponível:",error);firebaseReady=false;setSyncState("offline","Usando cópia local");scheduleFirebaseRetry()});
+        if(!hasPendingSync())setSyncState("online","Firebase em tempo real");render();
+      }catch(error){console.error("Firebase indisponível:",error);firebaseReady=false;setSyncState("offline",hasPendingSync()?"Pendente de sincronização":"Usando cópia local");showNotice("error",`${firebaseErrorMessage(error)} A ferramenta continuará usando a cópia local e tentará novamente.`);scheduleFirebaseRetry()}
       finally{firebaseStarting=false}
     }
     function showNotice(type,message){noticeArea.innerHTML=`<div class="notice ${type}"><span>${esc(message)}</span><button aria-label="Fechar" data-dismiss-notice>×</button></div>`;window.scrollTo({top:0,behavior:"smooth"})}
@@ -424,7 +461,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if(checkersRequired&&(!String(data.warehouseChecker||"").trim()||!String(data.gateChecker||"").trim())){showNotice("error","Informe o conferente Almoxarifado e o conferente Gate ou desative a exigência de identificação.");return}
       const supplier=upper(data.supplier),invoiceNumber=upper(data.invoiceNumber);if(receipts.some(i=>upper(i.supplier)===supplier&&upper(i.invoiceNumber)===invoiceNumber)){showNotice("error","Esta nota fiscal já foi registrada para o fornecedor informado.");return}
       const now=new Date().toISOString();const seseId=upper(data.seseId);const record={id:uid(),receiptDate:data.receiptDate,arrivalTime:data.arrivalTime,seseId,shift:data.shift,origin:data.origin,warehouseType,receiptType:data.receiptType,warehouse:data.warehouse,gate:data.gate,supplier,carrier:upper(data.carrier),invoiceNumber,vehiclePlate:upper(data.vehiclePlate),driver:upper(data.driver),warehouseChecker:upper(data.warehouseChecker),gateChecker:upper(data.gateChecker),warehouseSignature:String(data.warehouseSignature||"").trim(),status:"AGUARDANDO",hasDivergence:document.getElementById("has-divergence").checked,divergenceDescription:String(data.divergenceDescription||"").trim(),notes:String(data.notes||"").trim(),createdBy:seseId?`CHAPA ${seseId}`:"Cadastro manual",completedAt:null,createdAt:now,updatedAt:now};
-      receipts.push(record);saveLocalRecords();const saved=await saveRecord(record);if(saved){render();navigate(improductive?"improdutivo":"queue");showNotice("success",firebaseReady?"Recebimento registrado e sincronizado.":"Recebimento registrado neste dispositivo. A sincronização ocorrerá automaticamente.")}
+      receipts.push(record);const saved=await saveRecord(record);if(saved){render();navigate(improductive?"improdutivo":"queue");showNotice("success",firebaseReady&&!hasPendingSync()?"Recebimento registrado e sincronizado.":"Recebimento salvo neste dispositivo e mantido na fila de sincronização.")}
     }
 
     function renderQueue(){
@@ -552,7 +589,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     excelInput.addEventListener("change",event=>importExcel(event.target.files?.[0]));
     prefillExcelInput.addEventListener("change",event=>prefillNewReceipt(event.target.files?.[0]));
     window.addEventListener("storage",event=>{if(event.key===STORAGE_KEY&&!firebaseReady){receipts=loadRecords();render()}});
-    window.addEventListener("online",initializeFirebase);
+    window.addEventListener("online",()=>firebaseReady?flushPendingSync():initializeFirebase());
     updateThemeButton();render();initializeFirebase();
   })();
   </script>
