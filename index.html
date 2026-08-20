@@ -127,6 +127,8 @@
   html[data-theme="dark"] .workforce-stat{background:#122434;border-color:#293e50;box-shadow:0 5px 20px rgba(0,0,0,.16)}html[data-theme="dark"] .workforce-stat strong{color:#e7f0f7}html[data-theme="dark"] .workforce-stat span{color:#9aafc0}
   @media(min-width:901px){.queue-card{grid-template-columns:120px minmax(0,1fr) 290px}}.queue-finalize input{width:100%;min-height:58px;padding:12px 14px;font-size:24px;font-weight:900;letter-spacing:.13em;text-align:center;color:var(--ink);background:var(--surface);border:2px solid var(--blue);border-radius:11px}.queue-finalize input:focus{outline:none;box-shadow:0 0 0 4px rgba(0,94,184,.18)}html[data-theme="dark"] .queue-finalize input{background:#0b1b28;color:#f4f9fc;border-color:#58a9ff}
   .records-panel .table-wrap th+th,.records-panel .table-wrap td+td{border-left:1px solid var(--line)}.records-panel .table-wrap th{background:rgba(0,94,184,.025)}html[data-theme="dark"] .records-panel .table-wrap th{background:rgba(88,169,255,.045)}
+  .workspace{display:flex;flex-direction:column}.content{width:100%;flex:1}.document-footer{padding:16px 34px;border-top:1px solid var(--line);background:var(--surface);color:var(--muted);font-size:10px;font-weight:700;line-height:1.5;letter-spacing:.025em;text-align:center}
+  @media(max-width:820px){.document-footer{padding:14px 18px;font-size:9px}}
   </style>
 </head>
 <body>
@@ -167,6 +169,7 @@
         <div id="notice-area"></div>
         <div id="app-content"></div>
       </main>
+      <footer class="document-footer">KSU Classe 10.4 | F-05BR-SCA-233 | Data de emissão 20/08/2026 | REV.0</footer>
     </div>
     <button class="nav-backdrop" id="nav-backdrop" aria-label="Fechar menu" hidden></button>
   </div>
