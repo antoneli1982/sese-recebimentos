@@ -1260,8 +1260,6 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     let pendingSync=loadPendingSync();
     function hasPendingSync(){return Boolean(pendingSync.replace||Object.keys(pendingSync.upserts).length||Object.keys(pendingSync.deletes).length)}
     let pendingDurable = false;
-    let legacyArchived = false;
-    const migrationId = uid();
     function persistPendingSync(){
       try{
         if(hasPendingSync())localStorage.setItem(PENDING_SYNC_KEY,JSON.stringify(pendingSync));
@@ -1271,23 +1269,48 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
     // Registros confirmados ficam apenas no Firebase e na memória da página.
     function saveLocalRecords(){updateQueueBadge();return true}
-    async function archiveLegacyStorage(){
-      if(legacyArchived)return;
-      const entries={};
-      for(const key of [STORAGE_KEY,IMPRODUTIVO_KEY,DELETED_KEY,PENDING_SYNC_KEY,WORKFORCE_KEY]){
-        const value=localStorage.getItem(key);if(value!==null)entries[key.replaceAll('.','_')]=value;
-      }
-      if(Object.keys(entries).length){
-        const ref=firebaseApi.ref(firebaseDatabase,`recebimentosMigracoes/${migrationId}`);
-        try{await firebaseApi.set(ref,{createdAt:new Date().toISOString(),entries})}catch(error){throw new Error("Não foi possível preservar os dados antigos no Firebase (recebimentosMigracoes). Verifique a conexão e a permissão de gravação desse caminho. Nenhum dado local foi apagado.",{cause:error})}
-      }
-      legacyArchived=true;
+    // Firebase omite valores null e coleções vazias. Compare o conteúdo persistível.
+    function cloudValue(value){
+      if(value===null||value===undefined)return null;
+      if(typeof value!=="object")return value;
+      const entries=Object.entries(value).map(([key,item])=>[key,cloudValue(item)]).filter(([,item])=>item!==null).sort(([a],[b])=>a.localeCompare(b));
+      return entries.length?Object.fromEntries(entries):null;
     }
-    function releaseLegacyStorage(){
-      if(!legacyArchived||hasPendingSync())return;
-      // Não limpa preferências, autenticação ou dados de outras ferramentas.
-      for(const key of [STORAGE_KEY,IMPRODUTIVO_KEY,DELETED_KEY,PENDING_SYNC_KEY])localStorage.removeItem(key);
-      deletedRecords={};
+    function sameCloudValue(a,b){return JSON.stringify(cloudValue(a))===JSON.stringify(cloudValue(b))}
+    function recordConfirmed(local,remote){
+      if(!local?.id||!remote||remote.id!==local.id)return false;
+      if(sameCloudValue(local,remote))return true;
+      const localTime=Date.parse(local.updatedAt||local.createdAt||"");
+      const remoteTime=Date.parse(remote.updatedAt||remote.createdAt||"");
+      // Uma versão remota posterior substitui legitimamente o cache antigo.
+      return Number.isFinite(localTime)&&Number.isFinite(remoteTime)&&remoteTime>localTime;
+    }
+    async function releaseLegacyStorage(){
+      if(!firebaseReady||hasPendingSync())return;
+      const raw=localStorage.getItem(STORAGE_KEY);
+      const tombstones=localStorage.getItem(DELETED_KEY);
+      if(raw===null&&tombstones===null)return;
+      try{
+        // Releitura após confirmação das escritas, usando o caminho já utilizado pela ferramenta.
+        const snapshot=await firebaseApi.get(receiptsRef);
+        const remote=snapshot.val()||{};
+        if(hasPendingSync())return;
+        if(raw!==null&&localStorage.getItem(STORAGE_KEY)===raw){
+          const rows=JSON.parse(raw);
+          if(Array.isArray(rows)){
+            const remaining=rows.filter(row=>!recordConfirmed(row,remote[row?.id])&&!(row?.id&&deletedRecords[row.id]&&!remote[row.id]));
+            if(!remaining.length)localStorage.removeItem(STORAGE_KEY);
+            else if(remaining.length<rows.length)localStorage.setItem(STORAGE_KEY,JSON.stringify(remaining));
+          }
+        }
+        if(tombstones!==null&&localStorage.getItem(DELETED_KEY)===tombstones){
+          const previous=JSON.parse(tombstones);
+          const remaining=Object.fromEntries(Object.entries(previous).filter(([id])=>remote[id]));
+          if(!Object.keys(remaining).length)localStorage.removeItem(DELETED_KEY);
+          else localStorage.setItem(DELETED_KEY,JSON.stringify(remaining));
+          deletedRecords=remaining;
+        }
+      }catch(error){console.warn("Dados confirmados no Firebase; cópia local preservada para nova conferência:",error)}
     }
     function recordsObject(rows=receipts){return Object.fromEntries(rows.filter(item=>item&&item.id).map(item=>[item.id,item]))}
     function setSyncState(state,label){syncStatus.dataset.state=state;syncStatus.querySelector("span").textContent=label}
@@ -1297,7 +1320,6 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if(code.includes("permission-denied")||message.includes("permission_denied")||message.includes("permission denied"))return "O Firebase recusou a gravação. Verifique as regras do Realtime Database para usuários autenticados.";
       if(code.includes("api-key-not-valid")||message.includes("api key"))return "A chave do aplicativo Firebase foi recusada ou está com restrição de domínio.";
       if(code.includes("network-request-failed")||message.includes("network"))return "Sem conexão com os servidores do Firebase.";
-      if(message.includes("recebimentosmigracoes"))return error.message;
       return `Falha no Firebase${error?.code?` (${error.code})`:""}.`;
     }
     function scheduleFirebaseRetry(delay=15000){clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{if(firebaseReady)flushPendingSync();else initializeFirebase()},delay)}
@@ -1316,7 +1338,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       return [...merged.values()];
     }
     async function flushPendingSync(){
-      if(!firebaseReady){showNotice("error",pendingDurable?"Alteração pendente no dispositivo. Aguarde a conexão para confirmar o envio.":"Alteração ainda não salva. Mantenha esta página aberta até conectar ao Firebase.");return false}if(!hasPendingSync()){setSyncState("online","Firebase em tempo real");releaseLegacyStorage();return true}
+      if(!firebaseReady){showNotice("error",pendingDurable?"Alteração pendente no dispositivo. Aguarde a conexão para confirmar o envio.":"Alteração ainda não salva. Mantenha esta página aberta até conectar ao Firebase.");return false}if(!hasPendingSync()){setSyncState("online","Firebase em tempo real");await releaseLegacyStorage();return true}
       if(syncInFlight)return syncInFlight;
       syncInFlight=(async()=>{
         while(firebaseReady&&hasPendingSync()){
@@ -1325,7 +1347,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           else{const changes={...batch.upserts};for(const id of Object.keys(batch.deletes))changes[id]=null;if(Object.keys(changes).length)await firebaseApi.update(receiptsRef,changes)}
           if(pendingSync.revision===revision){pendingSync=emptyPendingSync();persistPendingSync()}else continue;
         }
-        releaseLegacyStorage();setSyncState("online","Firebase em tempo real");return true;
+        await releaseLegacyStorage();setSyncState("online","Firebase em tempo real");return true;
       })().catch(error=>{console.error("Falha ao sincronizar:",error);setSyncState("offline","Pendente de sincronização");showNotice("error",`${firebaseErrorMessage(error)} ${pendingDurable?"As alterações estão pendentes neste dispositivo.":"As alterações estão apenas na memória. Não feche esta página."} A ferramenta tentará novamente.`);scheduleFirebaseRetry(15000);return false}).finally(()=>{syncInFlight=null});
       return syncInFlight;
     }
@@ -1337,7 +1359,6 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       try{
         if(!firebaseApi){const [appSdk,authSdk,databaseSdk]=await Promise.all([import("https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js"),import("https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js"),import("https://www.gstatic.com/firebasejs/12.17.1/firebase-database.js")]);firebaseApi={initializeApp:appSdk.initializeApp,getAuth:authSdk.getAuth,signInAnonymously:authSdk.signInAnonymously,getDatabase:databaseSdk.getDatabase,ref:databaseSdk.ref,get:databaseSdk.get,set:databaseSdk.set,update:databaseSdk.update,remove:databaseSdk.remove,onValue:databaseSdk.onValue};firebaseApp=firebaseApi.initializeApp(firebaseConfig);firebaseAuth=firebaseApi.getAuth(firebaseApp);firebaseDatabase=firebaseApi.getDatabase(firebaseApp);receiptsRef=firebaseApi.ref(firebaseDatabase,"recebimentos");workforceRef=firebaseApi.ref(firebaseDatabase,"maoDeObra")}
         if(!firebaseAuth.currentUser)await firebaseApi.signInAnonymously(firebaseAuth);
-        await archiveLegacyStorage();
         const snapshot=await firebaseApi.get(receiptsRef);const remoteRows=snapshot.exists()?Object.values(snapshot.val()).filter(Boolean):[];
         const remoteMap=new Map(remoteRows.map(row=>[row.id,row]));
         if(!pendingSync.replace)for(const row of receipts){
@@ -1345,9 +1366,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           const remote=remoteMap.get(row.id);
           if((!remote||new Date(row.updatedAt||row.createdAt||0)>new Date(remote.updatedAt||remote.createdAt||0))&&!pendingSync.upserts[row.id])pendingSync.upserts[row.id]=row;
         }
-        for(const id of Object.keys(deletedRecords))if(!pendingSync.upserts[id])pendingSync.deletes[id]=true;
+        for(const [id,deletedAt] of Object.entries(deletedRecords)){const row=remoteMap.get(id);if(!pendingSync.upserts[id]&&(!row||Date.parse(deletedAt)>=Date.parse(row.updatedAt||row.createdAt||0)))pendingSync.deletes[id]=true;}
         persistPendingSync();receipts=mergeRemoteRows(remoteRows);saveLocalRecords();firebaseReady=true;await flushPendingSync();
-        try{if(localStorage.getItem(WORKFORCE_PENDING_KEY)==="1"){await syncWorkforceDirectory()}else{const workforceSnapshot=await firebaseApi.get(workforceRef);if(workforceSnapshot.exists()){const remotePeople=Object.values(workforceSnapshot.val()).filter(Boolean).map(sanitizePerson).filter(person=>person.name);if(remotePeople.length){saveWorkforceDirectory(remotePeople);if(legacyArchived)localStorage.removeItem(WORKFORCE_KEY)}}}}catch(workforceError){console.warn("Mão de obra remota indisponível; usando base local:",workforceError)}
+        try{if(localStorage.getItem(WORKFORCE_PENDING_KEY)==="1"){await syncWorkforceDirectory()}else{const workforceSnapshot=await firebaseApi.get(workforceRef);if(workforceSnapshot.exists()){const remotePeople=Object.values(workforceSnapshot.val()).filter(Boolean).map(sanitizePerson).filter(person=>person.name);if(remotePeople.length){saveWorkforceDirectory(remotePeople);try{const localPeople=JSON.parse(localStorage.getItem(WORKFORCE_KEY)||"null");if(localPeople&&sameCloudValue(localPeople.map(sanitizePerson),remotePeople))localStorage.removeItem(WORKFORCE_KEY)}catch{}}}}}catch(workforceError){console.warn("Mão de obra remota indisponível; usando base local:",workforceError)}
         if(stopRemoteListener)stopRemoteListener();stopRemoteListener=firebaseApi.onValue(receiptsRef,current=>{const remote=current.exists()?Object.values(current.val()).filter(Boolean):[];receipts=mergeRemoteRows(remote);saveLocalRecords();render();setSyncState(hasPendingSync()?"syncing":"online",hasPendingSync()?"Sincronização pendente":"Firebase em tempo real")},error=>{console.error("Leitura em tempo real indisponível:",error);firebaseReady=false;setSyncState("offline","Sem conexão com o Firebase");scheduleFirebaseRetry()});
         if(stopWorkforceListener)stopWorkforceListener();stopWorkforceListener=firebaseApi.onValue(workforceRef,current=>{if(!current.exists()||localStorage.getItem(WORKFORCE_PENDING_KEY)==="1")return;const rows=Object.values(current.val()).filter(Boolean).map(sanitizePerson).filter(person=>person.name);if(rows.length){saveWorkforceDirectory(rows);if(currentView==="workforce"||currentView==="new")render()}},error=>console.warn("Base de mão de obra sem leitura em tempo real:",error));
         if(!hasPendingSync())setSyncState("online","Firebase em tempo real");render();
