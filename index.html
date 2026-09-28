@@ -1226,7 +1226,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     function personDetails(person){return [person?.shift,person?.role,person?.area,person?.note].filter(Boolean).join(" · ")}
     function sanitizePerson(person){return {name:upper(person?.name),badge:normalizeBadge(person?.badge),shift:upper(person?.shift),role:upper(person?.role),area:upper(person?.area),note:upper(person?.note)}}
     function loadWorkforceDirectory(){try{const rows=JSON.parse(localStorage.getItem(WORKFORCE_KEY)||"[]");return Array.isArray(rows)&&rows.length?rows.map(sanitizePerson).filter(person=>person.name):allPeopleDirectory.map(sanitizePerson)}catch{return allPeopleDirectory.map(sanitizePerson)}}
-    function saveWorkforceDirectory(rows){effectivePeopleDirectory=rows.map(sanitizePerson).filter(person=>person.name);localStorage.setItem(WORKFORCE_KEY,JSON.stringify(effectivePeopleDirectory));localStorage.setItem(WORKFORCE_UPDATED_KEY,new Date().toISOString())}
+    function saveWorkforceDirectory(rows){effectivePeopleDirectory=rows.map(sanitizePerson).filter(person=>person.name);try{localStorage.setItem(WORKFORCE_UPDATED_KEY,new Date().toISOString())}catch{}}
     function findPersonByBadge(value){const badge=normalizeBadge(value);return badge?effectivePeopleDirectory.find(person=>person.badge===badge):null}
     function findPersonByName(value){const key=normalize(value);return key?effectivePeopleDirectory.find(person=>normalize(person.name)===key):null}
     function personLabel(value){const name=upper(value);const person=findPersonByName(name);const details=personDetails(person);return details?`${name} — ${details}`:name}
@@ -1254,16 +1254,40 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     function saveDeletedRecords(){try{localStorage.setItem(DELETED_KEY,JSON.stringify(deletedRecords))}catch{}}
     function emptyPendingSync(){return {revision:0,replace:null,upserts:{},deletes:{}}}
     function loadPendingSync(){
-      try{const raw=localStorage.getItem(PENDING_SYNC_KEY);if(!raw)return receipts.length?{...emptyPendingSync(),revision:1,upserts:recordsObject(receipts)}:emptyPendingSync();const parsed=JSON.parse(raw);return parsed&&typeof parsed==="object"?{...emptyPendingSync(),...parsed,upserts:parsed.upserts||{},deletes:parsed.deletes||{}}:emptyPendingSync()}
+      try{const raw=localStorage.getItem(PENDING_SYNC_KEY);if(!raw)return emptyPendingSync();const parsed=JSON.parse(raw);return parsed&&typeof parsed==="object"?{...emptyPendingSync(),...parsed,upserts:parsed.upserts||{},deletes:parsed.deletes||{}}:emptyPendingSync()}
       catch{return emptyPendingSync()}
     }
     let pendingSync=loadPendingSync();
     function hasPendingSync(){return Boolean(pendingSync.replace||Object.keys(pendingSync.upserts).length||Object.keys(pendingSync.deletes).length)}
-    function persistPendingSync(){try{localStorage.setItem(PENDING_SYNC_KEY,JSON.stringify(pendingSync));updateQueueBadge();return true}catch(error){showNotice("error","O armazenamento do navegador está cheio. Exporte o Excel antes de continuar.");return false}}
-    if(hasPendingSync())persistPendingSync();
-    function saveLocalRecords(){
-      try{localStorage.setItem(STORAGE_KEY,JSON.stringify(receipts));updateQueueBadge();return true}
-      catch(error){showNotice("error","O armazenamento do navegador está cheio. Exporte o Excel e exclua registros antigos.");return false}
+    let pendingDurable = false;
+    let legacyArchived = false;
+    const migrationId = uid();
+    function persistPendingSync(){
+      try{
+        if(hasPendingSync())localStorage.setItem(PENDING_SYNC_KEY,JSON.stringify(pendingSync));
+        else localStorage.removeItem(PENDING_SYNC_KEY);
+        pendingDurable=true;updateQueueBadge();return true;
+      }catch(error){pendingDurable=false;updateQueueBadge();return false}
+    }
+    // Registros confirmados ficam apenas no Firebase e na memória da página.
+    function saveLocalRecords(){updateQueueBadge();return true}
+    async function archiveLegacyStorage(){
+      if(legacyArchived)return;
+      const entries={};
+      for(const key of [STORAGE_KEY,IMPRODUTIVO_KEY,DELETED_KEY,PENDING_SYNC_KEY,WORKFORCE_KEY]){
+        const value=localStorage.getItem(key);if(value!==null)entries[key.replaceAll('.','_')]=value;
+      }
+      if(Object.keys(entries).length){
+        const ref=firebaseApi.ref(firebaseDatabase,`recebimentosMigracoes/${migrationId}`);
+        try{await firebaseApi.set(ref,{createdAt:new Date().toISOString(),entries})}catch(error){throw new Error("Não foi possível preservar os dados antigos no Firebase (recebimentosMigracoes). Verifique a conexão e a permissão de gravação desse caminho. Nenhum dado local foi apagado.",{cause:error})}
+      }
+      legacyArchived=true;
+    }
+    function releaseLegacyStorage(){
+      if(!legacyArchived||hasPendingSync())return;
+      // Não limpa preferências, autenticação ou dados de outras ferramentas.
+      for(const key of [STORAGE_KEY,IMPRODUTIVO_KEY,DELETED_KEY,PENDING_SYNC_KEY])localStorage.removeItem(key);
+      deletedRecords={};
     }
     function recordsObject(rows=receipts){return Object.fromEntries(rows.filter(item=>item&&item.id).map(item=>[item.id,item]))}
     function setSyncState(state,label){syncStatus.dataset.state=state;syncStatus.querySelector("span").textContent=label}
@@ -1273,6 +1297,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if(code.includes("permission-denied")||message.includes("permission_denied")||message.includes("permission denied"))return "O Firebase recusou a gravação. Verifique as regras do Realtime Database para usuários autenticados.";
       if(code.includes("api-key-not-valid")||message.includes("api key"))return "A chave do aplicativo Firebase foi recusada ou está com restrição de domínio.";
       if(code.includes("network-request-failed")||message.includes("network"))return "Sem conexão com os servidores do Firebase.";
+      if(message.includes("recebimentosmigracoes"))return error.message;
       return `Falha no Firebase${error?.code?` (${error.code})`:""}.`;
     }
     function scheduleFirebaseRetry(delay=15000){clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{if(firebaseReady)flushPendingSync();else initializeFirebase()},delay)}
@@ -1291,7 +1316,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       return [...merged.values()];
     }
     async function flushPendingSync(){
-      if(!firebaseReady||!hasPendingSync()){if(firebaseReady)setSyncState("online","Firebase em tempo real");return true}
+      if(!firebaseReady){showNotice("error",pendingDurable?"Alteração pendente no dispositivo. Aguarde a conexão para confirmar o envio.":"Alteração ainda não salva. Mantenha esta página aberta até conectar ao Firebase.");return false}if(!hasPendingSync()){setSyncState("online","Firebase em tempo real");releaseLegacyStorage();return true}
       if(syncInFlight)return syncInFlight;
       syncInFlight=(async()=>{
         while(firebaseReady&&hasPendingSync()){
@@ -1300,24 +1325,33 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           else{const changes={...batch.upserts};for(const id of Object.keys(batch.deletes))changes[id]=null;if(Object.keys(changes).length)await firebaseApi.update(receiptsRef,changes)}
           if(pendingSync.revision===revision){pendingSync=emptyPendingSync();persistPendingSync()}else continue;
         }
-        setSyncState("online","Firebase em tempo real");return true;
-      })().catch(error=>{console.error("Falha ao sincronizar:",error);setSyncState("offline","Pendente de sincronização");showNotice("error",`${firebaseErrorMessage(error)} Os dados permanecem salvos neste dispositivo e a ferramenta tentará novamente.`);scheduleFirebaseRetry(15000);return true}).finally(()=>{syncInFlight=null});
+        releaseLegacyStorage();setSyncState("online","Firebase em tempo real");return true;
+      })().catch(error=>{console.error("Falha ao sincronizar:",error);setSyncState("offline","Pendente de sincronização");showNotice("error",`${firebaseErrorMessage(error)} ${pendingDurable?"As alterações estão pendentes neste dispositivo.":"As alterações estão apenas na memória. Não feche esta página."} A ferramenta tentará novamente.`);scheduleFirebaseRetry(15000);return false}).finally(()=>{syncInFlight=null});
       return syncInFlight;
     }
-    function saveRecord(record){if(deletedRecords[record.id]){delete deletedRecords[record.id];saveDeletedRecords()}if(!saveLocalRecords())return Promise.resolve(false);markUpsert(record);return flushPendingSync()}
-    function deleteRecord(id){deletedRecords[id]=new Date().toISOString();saveDeletedRecords();if(!saveLocalRecords())return Promise.resolve(false);markDelete(id);return flushPendingSync()}
-    function saveRecords(){if(!saveLocalRecords())return Promise.resolve(false);markReplace();return flushPendingSync()}
+    function saveRecord(record){if(deletedRecords[record.id]){delete deletedRecords[record.id];saveDeletedRecords()}markUpsert(record);return flushPendingSync()}
+    function deleteRecord(id){deletedRecords[id]=new Date().toISOString();saveDeletedRecords();markDelete(id);return flushPendingSync()}
+    function saveRecords(){markReplace();return flushPendingSync()}
     async function initializeFirebase(){
       if(firebaseStarting||firebaseReady)return;firebaseStarting=true;setSyncState("connecting","Conectando ao Firebase");
       try{
         if(!firebaseApi){const [appSdk,authSdk,databaseSdk]=await Promise.all([import("https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js"),import("https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js"),import("https://www.gstatic.com/firebasejs/12.17.1/firebase-database.js")]);firebaseApi={initializeApp:appSdk.initializeApp,getAuth:authSdk.getAuth,signInAnonymously:authSdk.signInAnonymously,getDatabase:databaseSdk.getDatabase,ref:databaseSdk.ref,get:databaseSdk.get,set:databaseSdk.set,update:databaseSdk.update,remove:databaseSdk.remove,onValue:databaseSdk.onValue};firebaseApp=firebaseApi.initializeApp(firebaseConfig);firebaseAuth=firebaseApi.getAuth(firebaseApp);firebaseDatabase=firebaseApi.getDatabase(firebaseApp);receiptsRef=firebaseApi.ref(firebaseDatabase,"recebimentos");workforceRef=firebaseApi.ref(firebaseDatabase,"maoDeObra")}
         if(!firebaseAuth.currentUser)await firebaseApi.signInAnonymously(firebaseAuth);
-        const snapshot=await firebaseApi.get(receiptsRef);const remoteRows=snapshot.exists()?Object.values(snapshot.val()).filter(Boolean):[];receipts=mergeRemoteRows(remoteRows);saveLocalRecords();firebaseReady=true;await flushPendingSync();
-        try{if(localStorage.getItem(WORKFORCE_PENDING_KEY)==="1"){await syncWorkforceDirectory()}else{const workforceSnapshot=await firebaseApi.get(workforceRef);if(workforceSnapshot.exists()){const remotePeople=Object.values(workforceSnapshot.val()).filter(Boolean).map(sanitizePerson).filter(person=>person.name);if(remotePeople.length)saveWorkforceDirectory(remotePeople)}}}catch(workforceError){console.warn("Mão de obra remota indisponível; usando base local:",workforceError)}
-        if(stopRemoteListener)stopRemoteListener();stopRemoteListener=firebaseApi.onValue(receiptsRef,current=>{const remote=current.exists()?Object.values(current.val()).filter(Boolean):[];receipts=mergeRemoteRows(remote);saveLocalRecords();render();setSyncState(hasPendingSync()?"syncing":"online",hasPendingSync()?"Sincronização pendente":"Firebase em tempo real")},error=>{console.error("Leitura em tempo real indisponível:",error);firebaseReady=false;setSyncState("offline","Usando cópia local");scheduleFirebaseRetry()});
+        await archiveLegacyStorage();
+        const snapshot=await firebaseApi.get(receiptsRef);const remoteRows=snapshot.exists()?Object.values(snapshot.val()).filter(Boolean):[];
+        const remoteMap=new Map(remoteRows.map(row=>[row.id,row]));
+        if(!pendingSync.replace)for(const row of receipts){
+          if(!row?.id||pendingSync.deletes[row.id]||deletedRecords[row.id])continue;
+          const remote=remoteMap.get(row.id);
+          if((!remote||new Date(row.updatedAt||row.createdAt||0)>new Date(remote.updatedAt||remote.createdAt||0))&&!pendingSync.upserts[row.id])pendingSync.upserts[row.id]=row;
+        }
+        for(const id of Object.keys(deletedRecords))if(!pendingSync.upserts[id])pendingSync.deletes[id]=true;
+        persistPendingSync();receipts=mergeRemoteRows(remoteRows);saveLocalRecords();firebaseReady=true;await flushPendingSync();
+        try{if(localStorage.getItem(WORKFORCE_PENDING_KEY)==="1"){await syncWorkforceDirectory()}else{const workforceSnapshot=await firebaseApi.get(workforceRef);if(workforceSnapshot.exists()){const remotePeople=Object.values(workforceSnapshot.val()).filter(Boolean).map(sanitizePerson).filter(person=>person.name);if(remotePeople.length){saveWorkforceDirectory(remotePeople);if(legacyArchived)localStorage.removeItem(WORKFORCE_KEY)}}}}catch(workforceError){console.warn("Mão de obra remota indisponível; usando base local:",workforceError)}
+        if(stopRemoteListener)stopRemoteListener();stopRemoteListener=firebaseApi.onValue(receiptsRef,current=>{const remote=current.exists()?Object.values(current.val()).filter(Boolean):[];receipts=mergeRemoteRows(remote);saveLocalRecords();render();setSyncState(hasPendingSync()?"syncing":"online",hasPendingSync()?"Sincronização pendente":"Firebase em tempo real")},error=>{console.error("Leitura em tempo real indisponível:",error);firebaseReady=false;setSyncState("offline","Sem conexão com o Firebase");scheduleFirebaseRetry()});
         if(stopWorkforceListener)stopWorkforceListener();stopWorkforceListener=firebaseApi.onValue(workforceRef,current=>{if(!current.exists()||localStorage.getItem(WORKFORCE_PENDING_KEY)==="1")return;const rows=Object.values(current.val()).filter(Boolean).map(sanitizePerson).filter(person=>person.name);if(rows.length){saveWorkforceDirectory(rows);if(currentView==="workforce"||currentView==="new")render()}},error=>console.warn("Base de mão de obra sem leitura em tempo real:",error));
         if(!hasPendingSync())setSyncState("online","Firebase em tempo real");render();
-      }catch(error){console.error("Firebase indisponível:",error);firebaseReady=false;setSyncState("offline",hasPendingSync()?"Pendente de sincronização":"Usando cópia local");showNotice("error",`${firebaseErrorMessage(error)} A ferramenta continuará usando a cópia local e tentará novamente.`);scheduleFirebaseRetry()}
+      }catch(error){console.error("Firebase indisponível:",error);firebaseReady=false;setSyncState("offline",hasPendingSync()?"Pendente de sincronização":"Sem conexão com o Firebase");showNotice("error",`${firebaseErrorMessage(error)} Os dados locais não foram apagados. Mantenha a página aberta; uma nova tentativa será feita automaticamente.`);scheduleFirebaseRetry()}
       finally{firebaseStarting=false}
     }
     function showNotice(type,message){noticeArea.innerHTML=`<div class="notice ${type}"><span>${esc(message)}</span><button aria-label="Fechar" data-dismiss-notice>×</button></div>`;window.scrollTo({top:0,behavior:"smooth"})}
@@ -1592,13 +1626,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
 
     function workforceObject(){return Object.fromEntries(effectivePeopleDirectory.filter(person=>person.name).map((person,index)=>[person.badge?`c${person.badge}`:`s${index}`,person]))}
-    async function syncWorkforceDirectory(){if(!firebaseApi||!workforceRef||!firebaseAuth?.currentUser)return false;try{await firebaseApi.set(workforceRef,workforceObject());localStorage.removeItem(WORKFORCE_PENDING_KEY);return true}catch(error){console.error("Falha ao sincronizar mão de obra:",error);localStorage.setItem(WORKFORCE_PENDING_KEY,"1");return false}}
+    async function syncWorkforceDirectory(){if(!firebaseApi||!workforceRef||!firebaseAuth?.currentUser)return false;try{await firebaseApi.set(workforceRef,workforceObject());localStorage.removeItem(WORKFORCE_PENDING_KEY);localStorage.removeItem(WORKFORCE_KEY);return true}catch(error){console.error("Falha ao sincronizar mão de obra:",error);return false}}
     async function importWorkforceExcel(file){
       if(!file)return;try{if(!window.ExcelJS)throw new Error("Leitor de Excel indisponível.");const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(await file.arrayBuffer());const sheet=workbook.worksheets[0];if(!sheet)throw new Error("A planilha não possui abas.");
         const aliases={"nome":"name","nome completo":"name","colaborador":"name","chapa":"badge","chapa volkswagen":"badge","chapa vw":"badge","matricula":"badge","registro":"badge","turno":"shift","funcao":"role","cargo":"role","area":"area","setor":"area","observacao":"note","observacoes":"note"};const headers={};sheet.getRow(1).eachCell((cell,column)=>{const key=aliases[normalize(excelCellText(cell.value))];if(key)headers[key]=column});if(!headers.name||!headers.badge)throw new Error("Use os cabeçalhos Nome e Chapa Volkswagen na primeira linha.");
         const imported=[];let ignored=0;sheet.eachRow((row,rowNumber)=>{if(rowNumber===1)return;const person=sanitizePerson({name:excelCellText(row.getCell(headers.name).value),badge:excelCellText(row.getCell(headers.badge).value),shift:headers.shift?excelCellText(row.getCell(headers.shift).value):"",role:headers.role?excelCellText(row.getCell(headers.role).value):"",area:headers.area?excelCellText(row.getCell(headers.area).value):"",note:headers.note?excelCellText(row.getCell(headers.note).value):""});if(person.name&&person.badge)imported.push(person);else if(person.name||person.badge)ignored++});if(!imported.length)throw new Error("Nenhuma linha válida com Nome e Chapa Volkswagen foi encontrada.");
         const unique=new Map(imported.map(person=>[person.badge,person]));const merged=new Map(effectivePeopleDirectory.map(person=>[person.badge||`nome:${normalize(person.name)}`,person]));let inserted=0,updated=0;for(const person of unique.values()){if(merged.has(person.badge))updated++;else inserted++;merged.set(person.badge,person)}const finalRows=[...merged.values()].sort((a,b)=>a.name.localeCompare(b.name,"pt-BR"));
-        showModal("Atualizar mão de obra",`${unique.size} linhas válidas: ${inserted} novas e ${updated} atualizadas${ignored?`; ${ignored} incompletas serão ignoradas`:""}. Confirmar importação?`,async()=>{saveWorkforceDirectory(finalRows);localStorage.setItem(WORKFORCE_PENDING_KEY,"1");const synced=await syncWorkforceDirectory();closeModal();renderWorkforce();showNotice(synced?"success":"error",synced?"Mão de obra atualizada e sincronizada no Firebase.":"Mão de obra atualizada neste dispositivo. O Firebase não aceitou a gravação; será necessário revisar as regras da base maoDeObra.")})
+        showModal("Atualizar mão de obra",`${unique.size} linhas válidas: ${inserted} novas e ${updated} atualizadas${ignored?`; ${ignored} incompletas serão ignoradas`:""}. Confirmar importação?`,async()=>{const previous=effectivePeopleDirectory;saveWorkforceDirectory(finalRows);const synced=await syncWorkforceDirectory();if(!synced)effectivePeopleDirectory=previous;closeModal();renderWorkforce();showNotice(synced?"success":"error",synced?"Mão de obra atualizada e sincronizada no Firebase.":"A importação não foi salva. Verifique a conexão e as permissões do Firebase e importe novamente.")})
       }catch(error){showNotice("error",error.message||"Não foi possível importar a mão de obra.")}finally{workforceExcelInput.value=""}}
 
     function renderReports(){
@@ -1606,8 +1640,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const size=new Blob([localStorage.getItem(STORAGE_KEY)||"[]"]).size;content.innerHTML=`<section class="report-hero"><div><span class="eyebrow">Informações gerenciais</span><h2>Dados prontos para decisão</h2><p>Base compartilhada pelo Firebase com atualização automática em tempo real.</p></div><div class="excel-actions"><button class="secondary" data-import-excel>Importar Excel</button><button class="primary" data-export-excel>Exportar Excel</button></div></section>
       <section class="excel-info panel"><div class="excel-icon">X</div><div><strong>Importação controlada em .xlsx</strong><span>Fornecedor e Nota fiscal são obrigatórios: linhas incompletas são recusadas e a dupla Fornecedor + Nota fiscal duplicada é ignorada.</span></div><button class="text-button" data-export-model>Baixar modelo Excel</button></section>
       <section class="report-grid"><article class="panel"><div class="panel-head"><div><span class="panel-kicker">Distribuição</span><h3>Recebimentos por gate</h3></div></div><div class="donut-layout"><div class="donut" style="background:conic-gradient(${segments||"#e6eef4 0 100%"})"><span><strong>${receipts.length}</strong><small>total</small></span></div><div class="legend">${gates.map((i,index)=>`<span><i style="background:${colors[index]}"></i>${i.gate}<b>${i.count}</b></span>`).join("")}</div></div></article>
-      <article class="panel"><div class="panel-head"><div><span class="panel-kicker">Eficiência</span><h3>Resumo operacional</h3></div></div><div class="report-stats"><div><span>Tempo médio</span><strong>${m.average?`${m.average} min`:"—"}</strong></div><div><span>Dentro da meta</span><strong>${m.withinSla?`${m.withinSla}%`:"—"}</strong></div><div><span>Divergências abertas</span><strong>${m.divergence}</strong></div></div><div class="local-note"><strong>Sincronização segura:</strong> o Firebase é a base principal e este navegador mantém uma cópia de contingência.</div><div class="storage-info">Cópia local: ${(size/1024).toFixed(1)} KB</div></article></section>
-      <section class="panel insight"><span class="panel-kicker">Gestão dos dados</span><h3>Backup e sincronização</h3><div class="insight-grid"><p><strong>Tempo real</strong>Alterações aparecem automaticamente nos dispositivos conectados.</p><p><strong>Funcionamento contínuo</strong>Sem internet, os registros permanecem disponíveis neste dispositivo.</p><p><strong>Backup Excel</strong>Exporte periodicamente uma cópia administrativa da base.</p></div><div class="backup-actions"><button class="secondary" data-export-json>Backup JSON</button><button class="secondary" data-import-json>Restaurar JSON</button><button class="icon-action danger" data-clear-all>Apagar todos os registros</button><input id="json-input" class="hidden-file-input" type="file" accept=".json,application/json"></div></section>`;
+      <article class="panel"><div class="panel-head"><div><span class="panel-kicker">Eficiência</span><h3>Resumo operacional</h3></div></div><div class="report-stats"><div><span>Tempo médio</span><strong>${m.average?`${m.average} min`:"—"}</strong></div><div><span>Dentro da meta</span><strong>${m.withinSla?`${m.withinSla}%`:"—"}</strong></div><div><span>Divergências abertas</span><strong>${m.divergence}</strong></div></div><div class="local-note"><strong>Sincronização segura:</strong> o Firebase é a base principal e o navegador guarda apenas alterações pendentes de envio. A base completa é carregada ao conectar.</div><div class="storage-info">Dados antigos aguardando migração: ${(size/1024).toFixed(1)} KB</div></article></section>
+      <section class="panel insight"><span class="panel-kicker">Gestão dos dados</span><h3>Backup e sincronização</h3><div class="insight-grid"><p><strong>Tempo real</strong>Alterações aparecem automaticamente nos dispositivos conectados.</p><p><strong>Funcionamento contínuo</strong>Sem internet, a página aberta mantém os registros em memória. Reabrir a ferramenta exige conexão para carregar a base.</p><p><strong>Backup Excel</strong>Exporte periodicamente uma cópia administrativa da base.</p></div><div class="backup-actions"><button class="secondary" data-export-json>Backup JSON</button><button class="secondary" data-import-json>Restaurar JSON</button><button class="icon-action danger" data-clear-all>Apagar todos os registros</button><input id="json-input" class="hidden-file-input" type="file" accept=".json,application/json"></div></section>`;
       document.getElementById("json-input").addEventListener("change",importJson);
     }
 
@@ -1615,7 +1649,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     async function finalizeReceipt(id){const item=receipts.find(i=>i.id===id);if(!item||item.status!=="NO_ALMOXARIFADO")return;const input=document.getElementById(`completion-badge-${id}`);const person=findPersonByBadge(input?.value);if(!person){input?.focus();showNotice("error","Chapa Volkswagen não localizada. Atualize a base de mão de obra ou confira a digitação.");return}const now=new Date().toISOString();item.completionResponsible=person.name;item.gateProofValidated=true;item.status="CONCLUIDO";item.completedAt=now;item.updatedAt=now;if(await saveRecord(item)){renderQueue();showNotice("success",`Comprovação Gate concluída por ${person.name}.`)}}
     function openRejectModal(id){const item=receipts.find(i=>i.id===id);if(!item||item.status!=="NO_ALMOXARIFADO")return;document.getElementById("modal-root").innerHTML=`<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true"><h3>Rejeitar comprovação Gate</h3><p>NF ${esc(item.invoiceNumber)} · ${esc(item.supplier)}</p><label class="block-label">Motivo da rejeição <span class="required-star" aria-hidden="true">*</span><textarea id="reject-reason-input" rows="4" placeholder="Descreva o motivo da rejeição"></textarea></label><div class="modal-actions"><button class="secondary" data-close-modal>Cancelar</button><button class="primary danger" id="modal-confirm-reject">Confirmar rejeição</button></div></div></div>`;document.getElementById("modal-confirm-reject").addEventListener("click",()=>rejectReceipt(id));setTimeout(()=>document.getElementById("reject-reason-input")?.focus(),0)}
     async function rejectReceipt(id){const item=receipts.find(i=>i.id===id);if(!item||item.status!=="NO_ALMOXARIFADO")return;const textarea=document.getElementById("reject-reason-input");const reason=String(textarea?.value||"").trim();if(!reason){textarea?.focus();showNotice("error","Informe o motivo da rejeição antes de confirmar.");return}const now=new Date().toISOString();item.status="REJEITADO";item.rejectionReason=reason;item.rejectedAt=now;item.updatedAt=now;if(await saveRecord(item)){closeModal();renderQueue();showNotice("success",`Comprovação Gate rejeitada para a NF ${item.invoiceNumber}.`)}}
-    function confirmDelete(id){const item=receipts.find(i=>i.id===id);if(!item)return;showModal("Excluir registro",`Confirma a exclusão da NF ${item.invoiceNumber}, fornecedor ${item.supplier}?`,async()=>{receipts=receipts.filter(i=>i.id!==id);selectedRecordIds.delete(id);await deleteRecord(id);closeModal();renderRecords();showNotice("success","Registro excluído.")})}
+    function confirmDelete(id){const item=receipts.find(i=>i.id===id);if(!item)return;showModal("Excluir registro",`Confirma a exclusão da NF ${item.invoiceNumber}, fornecedor ${item.supplier}?`,async()=>{receipts=receipts.filter(i=>i.id!==id);selectedRecordIds.delete(id);if(await deleteRecord(id)){closeModal();renderRecords();showNotice("success","Registro excluído.")}})}
     function showModal(titleText,message,onConfirm){document.getElementById("modal-root").innerHTML=`<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true"><h3>${esc(titleText)}</h3><p>${esc(message)}</p><div class="modal-actions"><button class="secondary" data-close-modal>Cancelar</button><button class="primary" id="modal-confirm">Confirmar</button></div></div></div>`;document.getElementById("modal-confirm").addEventListener("click",onConfirm)}
     function closeModal(){document.getElementById("modal-root").innerHTML=""}
 
@@ -1681,7 +1715,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       showModal("Excluir registro",`Confirma a exclusão da NF ${item.invoiceNumber}, fornecedor ${item.supplier}?`,async()=>{
         receipts=receipts.filter(i=>i.id!==id);
         selectedRecordIds.delete(id);
-        await deleteRecord(id);
+        if(!await deleteRecord(id))return;
         closeModal();renderQueue();showNotice("success","Registro excluído.");
       });
     }
@@ -1736,7 +1770,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           const warehouse=upper(excelCellText(value("warehouse")));const record={receiptDate:excelDate(value("receiptDate")),arrivalTime:excelTime(value("arrivalTime")),seseId:upper(excelCellText(value("seseId"))),shift:upper(excelCellText(value("shift"))),origin:upper(excelCellText(value("origin"))),warehouseType:upper(excelCellText(value("warehouseType")))||(warehouse==="IMPRODUTIVO"?"IMPRODUTIVO":"PRODUTIVO"),receiptType:upper(excelCellText(value("receiptType"))),warehouse:"",gate:"GATE 01",supplier:upper(excelCellText(value("supplier"))),carrier:upper(excelCellText(value("carrier"))),invoiceNumber:upper(excelCellText(value("invoiceNumber"))),vehiclePlate:upper(excelCellText(value("vehiclePlate"))),driver:upper(excelCellText(value("driver"))),warehouseChecker:upper(excelCellText(value("warehouseChecker"))),gateChecker:upper(excelCellText(value("gateChecker"))),warehouseSignature:excelCellText(value()),status:excelStatus(value("status")),completionResponsible:upper(excelCellText(value("completionResponsible"))),hasDivergence:excelBoolean(value("hasDivergence")),divergenceDescription:excelCellText(value("divergenceDescription")),notes:excelCellText(value("notes")),createdBy:excelCellText(value("createdBy"))||"Importação Excel"};
           if(requiredFields.some(key=>!String(record[key]||"").trim())){invalid++;continue}const unique=`${record.supplier}\u0000${record.invoiceNumber}`;if(existing.has(unique)||seen.has(unique)){duplicates++;continue}seen.add(unique);receipts.push({...record,id:uid(),completedAt:record.status==="CONCLUIDO"?now:null,createdAt:now,updatedAt:now});inserted++;
         }
-        await saveRecords();render();showNotice("success",`Importação concluída: ${inserted} incluídos, ${duplicates} duplicados e ${invalid} inválidos.`);
+        if(!await saveRecords())return;render();showNotice("success",`Importação concluída: ${inserted} incluídos, ${duplicates} duplicados e ${invalid} inválidos.`);
       }catch(error){showNotice("error",error.message||"Não foi possível importar o Excel.")}finally{excelInput.value=""}
     }
 
@@ -1779,7 +1813,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const bytes=Uint8Array.from(binary,char=>char.charCodeAt(0)&255);return {blob:new Blob([bytes],{type:"application/pdf"}),name:`recebimentos-selecionados-${localDate()}.pdf`};
     }
     function generateGlobalPdf(){const items=sortedRecords().filter(item=>selectedRecordIds.has(item.id));if(!items.length){showNotice("error","Selecione pelo menos um registro para gerar o PDF global.");return}try{const pdf=buildGlobalPdf(items);downloadBlob(pdf.blob,pdf.name);showNotice("success",`PDF global gerado com ${items.length} registro${items.length===1?"":"s"}.`)}catch(error){console.error("Falha ao gerar PDF global:",error);showNotice("error","Não foi possível gerar o PDF global.")}}
-    function confirmDeleteSelected(){const ids=[...selectedRecordIds].filter(id=>receipts.some(item=>item.id===id));if(!ids.length){showNotice("error","Selecione pelo menos um registro para excluir.");return}showModal("Excluir registros selecionados",`Confirma a exclusão de ${ids.length} registro${ids.length===1?"":"s"}?`,async()=>{const deletedAt=new Date().toISOString();for(const id of ids)deletedRecords[id]=deletedAt;saveDeletedRecords();const idSet=new Set(ids);receipts=receipts.filter(item=>!idSet.has(item.id));selectedRecordIds.clear();await saveRecords();closeModal();renderRecords();showNotice("success",`${ids.length} registro${ids.length===1?" excluído":"s excluídos"}.`)})}
+    function confirmDeleteSelected(){const ids=[...selectedRecordIds].filter(id=>receipts.some(item=>item.id===id));if(!ids.length){showNotice("error","Selecione pelo menos um registro para excluir.");return}showModal("Excluir registros selecionados",`Confirma a exclusão de ${ids.length} registro${ids.length===1?"":"s"}?`,async()=>{const deletedAt=new Date().toISOString();for(const id of ids)deletedRecords[id]=deletedAt;saveDeletedRecords();const idSet=new Set(ids);receipts=receipts.filter(item=>!idSet.has(item.id));selectedRecordIds.clear();if(!await saveRecords())return;closeModal();renderRecords();showNotice("success",`${ids.length} registro${ids.length===1?" excluído":"s excluídos"}.`)})}
 
     /* ===================== EXPORTAÇÃO POWERPOINT (.PPTX) E VISUALIZADOR HTML =====================
        Criado para celulares corporativos sem leitor de PDF e sem permissão para instalar aplicativos.
@@ -2067,8 +2101,8 @@ body.doc-overlay-open{overflow:hidden}
 
     function downloadBlob(blob,name){const url=URL.createObjectURL(blob);const anchor=document.createElement("a");anchor.href=url;anchor.download=name;document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
     function exportJson(){downloadBlob(new Blob([JSON.stringify({version:1,exportedAt:new Date().toISOString(),receipts},null,2)],{type:"application/json"}),`backup-sese-recebimentos-${localDate()}.json`);showNotice("success","Backup JSON gerado.")}
-    async function importJson(event){try{const file=event.target.files?.[0];if(!file)return;const data=JSON.parse(await file.text());if(!data||!Array.isArray(data.receipts))throw new Error("Arquivo de backup inválido.");showModal("Restaurar backup",`O arquivo contém ${data.receipts.length} registros. A base atual será substituída.`,async()=>{receipts=data.receipts;for(const item of receipts)delete deletedRecords[item.id];saveDeletedRecords();await saveRecords();closeModal();renderReports();showNotice("success","Backup restaurado com sucesso.")})}catch(error){showNotice("error",error.message||"Não foi possível restaurar o backup.")}finally{event.target.value=""}}
-    function clearAll(){showModal("Apagar todos os registros","Esta ação remove definitivamente todos os dados sincronizados. Exporte um backup antes de continuar.",async()=>{const deletedAt=new Date().toISOString();for(const item of receipts)deletedRecords[item.id]=deletedAt;saveDeletedRecords();receipts=[];await saveRecords();closeModal();renderReports();showNotice("success","Todos os registros foram apagados.")})}
+    async function importJson(event){try{const file=event.target.files?.[0];if(!file)return;const data=JSON.parse(await file.text());if(!data||!Array.isArray(data.receipts))throw new Error("Arquivo de backup inválido.");showModal("Restaurar backup",`O arquivo contém ${data.receipts.length} registros. A base atual será substituída.`,async()=>{receipts=data.receipts;for(const item of receipts)delete deletedRecords[item.id];saveDeletedRecords();if(!await saveRecords())return;closeModal();renderReports();showNotice("success","Backup restaurado com sucesso.")})}catch(error){showNotice("error",error.message||"Não foi possível restaurar o backup.")}finally{event.target.value=""}}
+    function clearAll(){showModal("Apagar todos os registros","Esta ação remove definitivamente todos os dados sincronizados. Exporte um backup antes de continuar.",async()=>{const deletedAt=new Date().toISOString();for(const item of receipts)deletedRecords[item.id]=deletedAt;saveDeletedRecords();receipts=[];if(!await saveRecords())return;closeModal();renderReports();showNotice("success","Todos os registros foram apagados.")})}
 
     document.addEventListener("click",event=>{
       const target=event.target.closest("button,[data-view]");if(!target)return;
@@ -2093,6 +2127,7 @@ body.doc-overlay-open{overflow:hidden}
     prefillExcelInput.addEventListener("change",event=>prefillNewReceipt(event.target.files?.[0]));
     workforceExcelInput.addEventListener("change",event=>importWorkforceExcel(event.target.files?.[0]));
     window.addEventListener("storage",event=>{if(event.key===STORAGE_KEY&&!firebaseReady){receipts=loadRecords();render()}});
+    window.addEventListener("beforeunload",event=>{if(hasPendingSync()){event.preventDefault();event.returnValue=""}});
     window.addEventListener("online",()=>firebaseReady?flushPendingSync():initializeFirebase());
     function dailyPassword(){const parts=Object.fromEntries(new Intl.DateTimeFormat("pt-BR",{timeZone:"America/Sao_Paulo",day:"2-digit",month:"2-digit",year:"2-digit"}).formatToParts(new Date()).map(part=>[part.type,part.value]));return `${parts.day}${parts.month}${parts.year}`}
     let authorizedDay="",pendingGateView="";accessForm.addEventListener("submit",event=>{event.preventDefault();const input=document.getElementById("access-password"),error=document.getElementById("access-error");if(input.value!==dailyPassword()){error.textContent="Senha incorreta.";input.value="";input.focus();return}authorizedDay=dailyPassword();const target=pendingGateView||"workforce";pendingGateView="";error.textContent="";input.value="";accessGate.hidden=true;navigate(target)});setInterval(()=>{if(authorizedDay&&authorizedDay!==dailyPassword()){authorizedDay="";if(currentView==="workforce")navigate("dashboard")}},60000);updateThemeButton();setupAccentPicker();syncTopbarHeight();render();initializeFirebase();
