@@ -1635,26 +1635,120 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const rows=sortedRecords().filter(item=>inferredWarehouseType(item)==="IMPRODUTIVO");
       content.innerHTML=`
       <section class="intro-row"><div><h2>Controle de notas fiscais - Almoxarifado improdutivo</h2><p>Registro separado para materiais improdutivos conforme formulário operacional.</p></div><button class="primary compact" data-view="new" data-new-type="IMPRODUTIVO">+ Nova entrada</button></section>
-      <p class="directory-note"><strong>Conferentes com pesquisa livre:</strong> os dois campos pesquisam todos os nomes da relação Mão de Obra 08/2026, reaproveitam nomes já registrados e também aceitam novos nomes digitados manualmente.</p>
+      <p class="directory-note"><strong>Conferentes com pesquisa livre:</strong> os dois campos pesquisam todos os nomes da relação atual de Mão de Obra, reaproveitam nomes já registrados e também aceitam novos nomes digitados manualmente.</p>
       <section class="panel records-panel"><div class="table-wrap"><table><thead><tr><th>Fornecedor</th><th>Notas fiscais</th><th>Conferente (Almoxarifado)</th><th>Conferente (Gate)</th><th>Horário de recebimento</th><th>Data do fornecimento da NF (Gate)</th></tr></thead><tbody>${rows.length?rows.map(item=>`<tr><td><strong>${esc(item.supplier)}</strong><small>${esc(item.carrier||"")}</small></td><td><strong class="mono">${esc(item.invoiceNumber)}</strong></td><td>${esc(item.warehouseChecker||"—")}</td><td>${esc(item.gateChecker||"—")}</td><td>${esc(item.arrivalTime||"—")}</td><td>${formatDate(item.receiptDate)}</td></tr>`).join(""):`<tr><td colspan="6">Nenhum registro de almoxarifado improdutivo cadastrado.</td></tr>`}</tbody></table></div></section>`;
     }
 
     function renderWorkforce(){
       const updated=localStorage.getItem(WORKFORCE_UPDATED_KEY);const withBadge=effectivePeopleDirectory.filter(person=>person.badge).length;
-      content.innerHTML=`<section class="panel workforce-hero"><div><span class="panel-kicker">Base de identificação</span><h2>Atualizar mão de obra</h2><p>Importe um Excel para incluir pessoas novas ou atualizar cadastros pela chapa Volkswagen. Cadastros ausentes no arquivo não serão apagados.</p></div><button class="primary" data-import-workforce>Importar Excel</button></section>
+      content.innerHTML=`<section class="panel workforce-hero"><div><span class="panel-kicker">Base de identificação</span><h2>Atualizar mão de obra</h2><p>Importe o Excel no padrão do Anexo 2 para incluir pessoas novas ou atualizar cadastros pela chapa Volkswagen. O sistema localiza automaticamente a aba mensal de Mão de Obra e a linha de cabeçalhos. Cadastros ausentes no arquivo não serão apagados.</p></div><button class="primary" data-import-workforce>Importar Excel</button></section>
       <section class="workforce-grid"><article class="workforce-stat"><strong>${effectivePeopleDirectory.length}</strong><span>pessoas cadastradas</span></article><article class="workforce-stat"><strong>${withBadge}</strong><span>aptas à Comprovação Gate</span></article><article class="workforce-stat"><strong>${updated?esc(formatDateTime(updated)):"Base original"}</strong><span>última atualização</span></article></section>
-      <section class="panel workforce-columns"><strong>Cabeçalhos obrigatórios:</strong> Nome e Chapa Volkswagen.<br><strong>Cabeçalhos opcionais:</strong> Turno, Função/Cargo, Área/Setor e Observação.<br><small>A chapa é usada somente para identificar a pessoa na Comprovação Gate e não aparece nas listas de nomes.</small></section>`;
+      <section class="panel workforce-columns"><strong>Padrão principal (Anexo 2):</strong> Chapa VW, Nome, Cargo Atual, Turno e Carta de Versatilidade.<br><strong>Observações reconhecidas:</strong> Observação da Operação, Observação do RH, Retorno, PCD e Brigadista e Cipeiro.<br><small>Também continuam aceitos os cabeçalhos equivalentes já suportados. A chapa é usada somente para identificar a pessoa na Comprovação Gate e não aparece nas listas de nomes.</small></section>`;
     }
 
     function workforceObject(){return Object.fromEntries(effectivePeopleDirectory.filter(person=>person.name).map((person,index)=>[person.badge?`c${person.badge}`:`s${index}`,person]))}
     async function syncWorkforceDirectory(){if(!firebaseApi||!workforceRef||!firebaseAuth?.currentUser)return false;try{await firebaseApi.set(workforceRef,workforceObject());localStorage.removeItem(WORKFORCE_PENDING_KEY);localStorage.removeItem(WORKFORCE_KEY);return true}catch(error){console.error("Falha ao sincronizar mão de obra:",error);return false}}
     async function importWorkforceExcel(file){
-      if(!file)return;try{if(!window.ExcelJS)throw new Error("Leitor de Excel indisponível.");const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(await file.arrayBuffer());const sheet=workbook.worksheets[0];if(!sheet)throw new Error("A planilha não possui abas.");
-        const aliases={"nome":"name","nome completo":"name","colaborador":"name","chapa":"badge","chapa volkswagen":"badge","chapa vw":"badge","matricula":"badge","registro":"badge","turno":"shift","funcao":"role","cargo":"role","area":"area","setor":"area","observacao":"note","observacoes":"note"};const headers={};sheet.getRow(1).eachCell((cell,column)=>{const key=aliases[normalize(excelCellText(cell.value))];if(key)headers[key]=column});if(!headers.name||!headers.badge)throw new Error("Use os cabeçalhos Nome e Chapa Volkswagen na primeira linha.");
-        const imported=[];let ignored=0;sheet.eachRow((row,rowNumber)=>{if(rowNumber===1)return;const person=sanitizePerson({name:excelCellText(row.getCell(headers.name).value),badge:excelCellText(row.getCell(headers.badge).value),shift:headers.shift?excelCellText(row.getCell(headers.shift).value):"",role:headers.role?excelCellText(row.getCell(headers.role).value):"",area:headers.area?excelCellText(row.getCell(headers.area).value):"",note:headers.note?excelCellText(row.getCell(headers.note).value):""});if(person.name&&person.badge)imported.push(person);else if(person.name||person.badge)ignored++});if(!imported.length)throw new Error("Nenhuma linha válida com Nome e Chapa Volkswagen foi encontrada.");
-        const unique=new Map(imported.map(person=>[person.badge,person]));const merged=new Map(effectivePeopleDirectory.map(person=>[person.badge||`nome:${normalize(person.name)}`,person]));let inserted=0,updated=0;for(const person of unique.values()){if(merged.has(person.badge))updated++;else inserted++;merged.set(person.badge,person)}const finalRows=[...merged.values()].sort((a,b)=>a.name.localeCompare(b.name,"pt-BR"));
-        showModal("Atualizar mão de obra",`${unique.size} linhas válidas: ${inserted} novas e ${updated} atualizadas${ignored?`; ${ignored} incompletas serão ignoradas`:""}. Confirmar importação?`,async()=>{const previous=effectivePeopleDirectory;saveWorkforceDirectory(finalRows);const synced=await syncWorkforceDirectory();if(!synced)effectivePeopleDirectory=previous;closeModal();renderWorkforce();showNotice(synced?"success":"error",synced?"Mão de obra atualizada e sincronizada no Firebase.":"A importação não foi salva. Verifique a conexão e as permissões do Firebase e importe novamente.")})
-      }catch(error){showNotice("error",error.message||"Não foi possível importar a mão de obra.")}finally{workforceExcelInput.value=""}}
+      if(!file)return;
+      try{
+        if(!window.ExcelJS)throw new Error("Leitor de Excel indisponível.");
+        const workbook=new ExcelJS.Workbook();
+        await workbook.xlsx.load(await file.arrayBuffer());
+        if(!workbook.worksheets.length)throw new Error("A planilha não possui abas.");
+
+        // O Anexo 2 mensal (ex.: "MO 09-2026") usa cabeçalhos fora da primeira linha.
+        // Por isso a importação procura automaticamente a aba de mão de obra e a linha de cabeçalho.
+        const aliases={
+          "nome":"name","nome completo":"name","colaborador":"name",
+          "chapa":"badge","chapa volkswagen":"badge","chapa vw":"badge","matricula":"badge","registro":"badge",
+          "turno":"shift",
+          "funcao":"role","cargo":"role","cargo atual":"role",
+          "area":"area","setor":"area","carta de versatilidade":"area"
+        };
+        const headerPriority={
+          "chapa vw":100,"chapa volkswagen":100,"chapa":90,"matricula":50,"registro":40,
+          "nome":100,"nome completo":90,"colaborador":80,
+          "cargo atual":100,"cargo":90,"funcao":80,
+          "turno":100,
+          "carta de versatilidade":100,"area":90,"setor":80
+        };
+        const noteAliases=new Set([
+          "observacao","observacoes","observacao da operacao","observacao do rh",
+          "retorno","pcd","brigadista e cipeiro","brigadista cipeiro","brigadista e cipa"
+        ]);
+        const sheetPriority=sheet=>{
+          const key=normalize(sheet?.name);
+          if(key.includes("demitid"))return -100;
+          if(/^mo(?:\s|$)/.test(key)||key.includes("mao de obra"))return 100;
+          return 0;
+        };
+        const orderedSheets=[...workbook.worksheets].sort((a,b)=>sheetPriority(b)-sheetPriority(a));
+        let detected=null;
+        for(const candidate of orderedSheets){
+          const scanLimit=Math.min(Math.max(candidate.rowCount||0,1),20);
+          for(let rowNumber=1;rowNumber<=scanLimit;rowNumber++){
+            const headers={};const priorities={};const noteColumns=[];
+            candidate.getRow(rowNumber).eachCell((cell,column)=>{
+              const label=normalize(excelCellText(cell.value));
+              const key=aliases[label];
+              const priority=headerPriority[label]||0;
+              if(key&&(priorities[key]===undefined||priority>priorities[key])){headers[key]=column;priorities[key]=priority}
+              if(noteAliases.has(label))noteColumns.push(column);
+            });
+            if(headers.name&&headers.badge){
+              detected={sheet:candidate,headerRow:rowNumber,headers,noteColumns};
+              break;
+            }
+          }
+          if(detected)break;
+        }
+        if(!detected)throw new Error("Não encontrei o padrão do Anexo 2. A planilha precisa ter Chapa VW (ou Chapa Volkswagen) e Nome na mesma linha de cabeçalho.");
+
+        const {sheet,headerRow,headers,noteColumns}=detected;
+        const imported=[];let ignored=0;
+        for(let rowNumber=headerRow+1;rowNumber<=sheet.rowCount;rowNumber++){
+          const row=sheet.getRow(rowNumber);
+          const note=[...new Set(noteColumns.map(column=>upper(excelCellText(row.getCell(column).value))).filter(Boolean))].join(" · ");
+          const person=sanitizePerson({
+            name:excelCellText(row.getCell(headers.name).value),
+            badge:excelCellText(row.getCell(headers.badge).value),
+            shift:headers.shift?excelCellText(row.getCell(headers.shift).value):"",
+            role:headers.role?excelCellText(row.getCell(headers.role).value):"",
+            area:headers.area?excelCellText(row.getCell(headers.area).value):"",
+            note
+          });
+          if(person.name&&person.badge)imported.push(person);
+          else if(person.name||person.badge)ignored++;
+        }
+        if(!imported.length)throw new Error(`Nenhuma linha válida com Nome e Chapa VW foi encontrada na aba ${sheet.name}.`);
+
+        const unique=new Map(imported.map(person=>[person.badge,person]));
+        const merged=new Map(effectivePeopleDirectory.map(person=>[person.badge||`nome:${normalize(person.name)}`,person]));
+        let inserted=0,updated=0;
+        for(const person of unique.values()){
+          if(merged.has(person.badge))updated++;else inserted++;
+          merged.set(person.badge,person);
+        }
+        const finalRows=[...merged.values()].sort((a,b)=>a.name.localeCompare(b.name,"pt-BR"));
+        const sourceLabel=`aba “${sheet.name}”, cabeçalho na linha ${headerRow}`;
+        showModal(
+          "Atualizar mão de obra",
+          `${unique.size} linhas válidas do Anexo 2 (${sourceLabel}): ${inserted} novas e ${updated} atualizadas${ignored?`; ${ignored} incompletas serão ignoradas`:""}. Confirmar importação?`,
+          async()=>{
+            const previous=effectivePeopleDirectory;
+            saveWorkforceDirectory(finalRows);
+            const synced=await syncWorkforceDirectory();
+            if(!synced)effectivePeopleDirectory=previous;
+            closeModal();renderWorkforce();
+            showNotice(synced?"success":"error",synced?`Mão de obra atualizada pelo Anexo 2 (${sheet.name}) e sincronizada no Firebase.`:"A importação não foi salva. Verifique a conexão e as permissões do Firebase e importe novamente.");
+          }
+        );
+      }catch(error){
+        showNotice("error",error.message||"Não foi possível importar a mão de obra.");
+      }finally{
+        workforceExcelInput.value="";
+      }
+    }
 
     function renderReports(){
       const m=metrics();const gates=[{gate:"GATE 01",count:receipts.length}];const total=Math.max(1,receipts.length);let cumulative=0;const colors=["#005eb8"];const segments=gates.map((i,index)=>{const from=cumulative;cumulative+=i.count/total*100;return `${colors[index]} ${from}% ${cumulative}%`}).join(",");
