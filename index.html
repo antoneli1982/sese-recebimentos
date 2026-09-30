@@ -1049,7 +1049,7 @@
   .workforce-list #workforce-count{display:block;margin-top:6px;color:var(--muted)}
   .workforce-table{max-height:580px}
   .workforce-table th{position:sticky;top:0;z-index:1}
-  .workforce-table td:first-child{min-width:245px}.workforce-table td:nth-child(2){min-width:170px}
+  .workforce-table td:first-child{min-width:245px}.workforce-table td:nth-child(2){min-width:140px;white-space:nowrap}.workforce-table td:nth-child(3){min-width:170px}
   .notice.warning{background:var(--blue-soft);border:1px solid var(--blue);color:var(--ink)}
   @media(max-width:720px){.workforce-sync{align-items:stretch;flex-direction:column}.workforce-filters{align-items:stretch;flex-direction:column}.workforce-filters label{min-width:0!important}}
 </style>
@@ -1830,17 +1830,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       <section class="panel workforce-sync" role="status"><p>${esc(workforceStatusText())}</p>${hasPendingWorkforce()||workforceReadError?`<button class="secondary compact" data-sync-workforce ${workforceSyncInFlight?"disabled":""}>${workforceSyncInFlight?"Sincronizando…":"Tentar sincronizar"}</button>`:""}</section>
       <section class="panel workforce-tools"><div class="workforce-tool-buttons"><button class="secondary compact" data-diagnose-workforce ${workforceDiagnosticRunning?"disabled":""}>${workforceDiagnosticRunning?"Verificando…":"Diagnosticar Firebase"}</button><button class="secondary compact" data-backup-workforce>Baixar cópia dos nomes</button></div>${workforceDiagnostic?`<pre class="workforce-diagnostic" aria-live="polite">${esc(workforceDiagnostic)}</pre>`:""}</section>
       <section class="panel records-panel workforce-list"><div class="panel-head"><div><span class="panel-kicker">${workforceCloudLoaded?"Base compartilhada no Firebase":"Aguardando a base compartilhada"}</span><h3>Lista de nomes</h3><small id="workforce-count" aria-live="polite"></small></div></div>
-      <div class="workforce-filters"><label for="workforce-search">Pesquisar nome, cargo ou área<input type="search" id="workforce-search" data-workforce-search placeholder="Digite para pesquisar…" value="${esc(workforceSearchTerm)}" autocomplete="off"></label><label for="workforce-shift">Turno<select id="workforce-shift" data-workforce-shift><option value="">Todos os turnos</option>${shifts.map(shift=>`<option value="${esc(shift)}" ${shift===workforceShiftFilter?"selected":""}>${esc(shift)}</option>`).join("")}</select></label><button class="secondary compact" data-clear-workforce>Limpar filtros</button></div>
-      <div class="table-wrap workforce-table"><table aria-label="Lista de nomes da mão de obra"><thead><tr><th scope="col">Nome</th><th scope="col">Cargo atual</th><th scope="col">Turno</th><th scope="col">Carta de versatilidade / Área</th><th scope="col">Sincronização</th></tr></thead><tbody id="workforce-table-body"></tbody></table></div></section>
-      <section class="panel workforce-columns"><strong>Padrão principal (Anexo 2):</strong> Chapa VW, Nome, Cargo Atual, Turno e Carta de Versatilidade.<br><small>A chapa é usada para identificar a pessoa na Comprovação Gate e não aparece na lista de nomes.</small></section>`;
+      <div class="workforce-filters"><label for="workforce-search">Pesquisar nome, chapa Volkswagen, cargo ou área<input type="search" id="workforce-search" data-workforce-search placeholder="Digite para pesquisar…" value="${esc(workforceSearchTerm)}" autocomplete="off"></label><label for="workforce-shift">Turno<select id="workforce-shift" data-workforce-shift><option value="">Todos os turnos</option>${shifts.map(shift=>`<option value="${esc(shift)}" ${shift===workforceShiftFilter?"selected":""}>${esc(shift)}</option>`).join("")}</select></label><button class="secondary compact" data-clear-workforce>Limpar filtros</button></div>
+      <div class="table-wrap workforce-table"><table aria-label="Lista de nomes da mão de obra"><thead><tr><th scope="col">Nome</th><th scope="col">Chapa Volkswagen</th><th scope="col">Cargo atual</th><th scope="col">Turno</th><th scope="col">Carta de versatilidade / Área</th><th scope="col">Sincronização</th></tr></thead><tbody id="workforce-table-body"></tbody></table></div></section>
+      <section class="panel workforce-columns"><strong>Padrão principal (Anexo 2):</strong> Chapa VW, Nome, Cargo Atual, Turno e Carta de Versatilidade.<br><small>A chapa Volkswagen aparece ao lado do nome e pode ser usada na pesquisa e na identificação para a Comprovação Gate.</small></section>`;
       renderWorkforceRows();
     }
     function renderWorkforceRows(){
       const tbody=document.getElementById("workforce-table-body");if(!tbody)return;
       const tokens=normalize(workforceSearchTerm).split(" ").filter(Boolean);
-      const rows=effectivePeopleDirectory.filter(person=>(!workforceShiftFilter||person.shift===workforceShiftFilter)&&tokens.every(token=>normalize([person.name,person.role,person.area].join(" ")).includes(token))).sort((a,b)=>a.name.localeCompare(b.name,"pt-BR"));
+      const rows=effectivePeopleDirectory.filter(person=>(!workforceShiftFilter||person.shift===workforceShiftFilter)&&tokens.every(token=>normalize([person.name,person.badge,person.role,person.area].join(" ")).includes(token))).sort((a,b)=>a.name.localeCompare(b.name,"pt-BR"));
       document.getElementById("workforce-count").textContent=`${rows.length} de ${effectivePeopleDirectory.length} pessoas`;
-      tbody.innerHTML=rows.length?rows.map(person=>`<tr><td><strong>${esc(person.name)}</strong></td><td>${esc(person.role||"—")}</td><td>${esc(person.shift||"—")}</td><td>${esc(person.area||"—")}</td><td>${workforcePending.upserts[workforcePersonKey(person)]?"Pendente de envio":workforceCloudLoaded?"Compartilhado":"Aguardando conexão"}</td></tr>`).join(""):'<tr><td colspan="5">Nenhuma pessoa encontrada para os filtros informados.</td></tr>';
+      tbody.innerHTML=rows.length?rows.map(person=>`<tr><td><strong>${esc(person.name)}</strong></td><td class="mono">${esc(person.badge||"Não informada")}</td><td>${esc(person.role||"—")}</td><td>${esc(person.shift||"—")}</td><td>${esc(person.area||"—")}</td><td>${workforcePending.upserts[workforcePersonKey(person)]?"Pendente de envio":workforceCloudLoaded?"Compartilhado":"Aguardando conexão"}</td></tr>`).join(""):'<tr><td colspan="6">Nenhuma pessoa encontrada para os filtros informados.</td></tr>';
     }
     function scheduleWorkforceRetry(){
       clearTimeout(workforceRetryTimer);
@@ -1873,7 +1873,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     async function diagnoseWorkforce(){
       if(workforceDiagnosticRunning)return;
       workforceDiagnosticRunning=true;workforceDiagnostic="Verificando a sessão e as leituras do banco…";renderWorkforce();
-      const lines=["DIAGNÓSTICO DE MÃO DE OBRA — revisão 2",`Projeto: ${firebaseConfig.projectId}`,`Banco: ${firebaseConfig.databaseURL}`,"Caminho de gravação: /maoDeObra",`Abertura: ${window.location?.protocol==="file:"?"arquivo local":window.location?.origin||"não informado"}`,`Conexão do banco: ${firebaseConnected===true?"conectado":firebaseConnected===false?"desconectado":"não confirmada"}`,`Pendentes: ${Object.keys(workforcePending.upserts).length}`,`Cópia local: ${workforcePendingDurable?workforceStorageKind:"não confirmada"}`];
+      const lines=["DIAGNÓSTICO DE MÃO DE OBRA — revisão 3",`Projeto: ${firebaseConfig.projectId}`,`Banco: ${firebaseConfig.databaseURL}`,"Caminho de gravação: /maoDeObra",`Abertura: ${window.location?.protocol==="file:"?"arquivo local":window.location?.origin||"não informado"}`,`Conexão do banco: ${firebaseConnected===true?"conectado":firebaseConnected===false?"desconectado":"não confirmada"}`,`Pendentes: ${Object.keys(workforcePending.upserts).length}`,`Cópia local: ${workforcePendingDurable?workforceStorageKind:"não confirmada"}`];
       if(workforceStorageError)lines.push(`Erro de armazenamento: ${workforceStorageError.name||"Erro"}: ${workforceStorageError.message||"sem detalhe"}`);
       try{
         const user=firebaseAuth?.currentUser;
