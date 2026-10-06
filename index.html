@@ -1756,7 +1756,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
 
     function renderQueue(){
-      const pending=receipts.filter(i=>i.status!=="CONCLUIDO"&&i.status!=="REJEITADO").sort((a,b)=>new Date(a.createdAt)-new Date(b.createdAt));
+      const pending=receipts.filter(i=>i.status!=="CONCLUIDO"&&i.status!=="REJEITADO").sort((a,b)=>{
+        const key=i=>{const d=String(i.receiptDate||"").slice(0,10);const t=/^\d{1,2}:\d{2}/.test(String(i.arrivalTime||""))?String(i.arrivalTime).slice(0,5).padStart(5,"0"):"00:00";return /^\d{4}-\d{2}-\d{2}$/.test(d)?`${d}T${t}`:"9999-12-31T00:00"};
+        const ka=key(a),kb=key(b);if(ka!==kb)return ka<kb?-1:1;
+        return (new Date(a.createdAt).getTime()||0)-(new Date(b.createdAt).getTime()||0);
+      });
       const term=normalize(queueSearchTerm);
       const rows=term?pending.filter(i=>normalize(i.invoiceNumber).includes(term)||normalize(i.supplier).includes(term)):pending;
       content.innerHTML=`<section class="queue-layout"><div class="queue-summary"><div><h2>Comprovação Gate</h2><p>Na etapa final, confira o relatório completo, informe a chapa Volkswagen e aprove ou rejeite a comprovação Gate em uma única ação.</p></div><span>${rows.length} em operação${term?` de ${pending.length}`:""}</span></div>
